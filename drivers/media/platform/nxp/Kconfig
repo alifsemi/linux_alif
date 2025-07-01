@@ -4,6 +4,17 @@
 
 comment "NXP media platform drivers"
 
+config VIDEO_DWC_MIPI_CSIS
+	tristate "DesignWare Cores MIPI CSI-2 receiver found on i.MX93"
+	depends on ARCH_MXC || COMPILE_TEST
+	depends on VIDEO_DEV
+	select MEDIA_CONTROLLER
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  Video4Linux2 sub-device driver for the DesignWare Cores MIPI
+	  CSI-2 receiver used on i.MX93.
+
 config VIDEO_IMX7_CSI
 	tristate "NXP CSI Bridge driver"
 	depends on ARCH_MXC || COMPILE_TEST
