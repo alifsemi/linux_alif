@@ -319,7 +319,7 @@ static int ensemble_rtc_probe(struct platform_device *pdev)
 
 	pdata->clk = devm_clk_get(&pdev->dev, "timer");
 	if (IS_ERR(pdata->clk)) {
-		dev_err(&pdev->dev, "Couldn't get the clock for RTC\n");
+		dev_err(&pdev->dev, "Couldn't  why get the clock for RTC\n");
 		return -ENODEV;
 	}
 	ret = clk_prepare_enable(pdata->clk);
