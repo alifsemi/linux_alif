@@ -40,7 +40,7 @@
 #define SE_MHU1_RX_STATUS "okay"
 
 /* Ethernet defines */
-#define ETH_STATUS "disabled"
+#define ETH_STATUS "okay"
 
 /* SDMMC defines */
 #define SDHCI_STATUS "disabled"
@@ -65,7 +65,7 @@
 #define HSUSB_STATUS "disabled"
 
 /* UTIMER defines */
-#define UTIMER0_STATUS "disabled"
+#define UTIMER0_STATUS "okay"
 
 /* DSI defines */
 #define DSI_STATUS "disabled"
@@ -126,9 +126,9 @@
 #define CPUFREQ_STATUS "disabled"
 
 /* Memory Defines */
-#define MEM_STITCH_STATUS "okay"
+#define MEM_STITCH_STATUS "disabled"
 #define MEM_HYPER_STATUS  "disabled"
-#define MEM_HYP_STITCH_STATUS "disabled"
+#define MEM_HYP_STITCH_STATUS "okay"
 
 /* Ethosu NPU */
 #define ETHOSU_NPU_STATUS "disabled"

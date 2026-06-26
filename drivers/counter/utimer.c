@@ -2,11 +2,11 @@
 /*
  * Counter driver for the Alif Semiconductor utimer IP
  * Copyright (C) 2021-2025 Alif Semiconductor
- *
- * This driver supports the utimer counter.
  */
 #include <linux/bitops.h>
 #include <linux/counter.h>
+#include <linux/math64.h>
+#include <linux/clockchips.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/io.h>
@@ -25,39 +25,37 @@
 #include <linux/atomic.h>
 #include <linux/printk.h>
 #include "register_offsets.h"
-/**
- * struct utimer_cnt -	Private driver data for Alif UTIMER counter device
- * @counter:		Counter device structure registered with the Linux counter subsystem
- * @pdev:		Pointer to the associated platform device
- * @base:		Base address of the mapped I/O register region
- * @chan_base:		Base address of mapped I/O region for a particular channel
- * @lock:		Spinlock for protecting concurrent register access
- * @irq:		Array of interrupt numbers (size MAX_INTERRUPTS)
- * @start_time:		Array of ktime timestamps marking when each counter started
- * @irq_timestamp:	Array of ktime timestamps having the time of last interrupt for each counter
- * @ut_counter_status:	Atomic status flags for each counter:
- *			- 0: Underflow status
- *			- 1: Overflow status
- * @elapsed_time_ms:	Atomic64 values tracking elapsed time in milliseconds for each counter
- * @work:		Work struct for deferred interrupt processing in bottom-half context
- * @wq:			Pointer to the dedicated workqueue for handling counter interrupt tasks
- * @pending_channels:	Bitmask tracking which channels need interrupt processing
- *
- */
+
+#define DEFAULT_COUNTER_STATUS		0
+#define DEFAULT_ELAPSED_TIME		0
+#define UT_NUM_COUNTERS			12
+
+/* Late detection threshold: 40000000 ticks (~100ms at 400MHz) */
+#define UTIMER_LATE_DETECTION_TICKS	40000000
+
 struct utimer_cnt {
-	struct counter_device counter;
+	struct counter_device *counter_dev;	/* pointer to the REAL counter device */
 	struct platform_device *pdev;
 	void __iomem *base;
 	void __iomem *chan_base;
+	/* Spinlock to protect utimer device state */
 	spinlock_t lock;
 	int irq[MAX_INTERRUPTS];
 	ktime_t start_time[UT_NUM_COUNTERS];
 	ktime_t irq_timestamp[UT_NUM_COUNTERS];
 	atomic_t ut_counter_status[UT_NUM_COUNTERS];
 	atomic64_t elapsed_time_ms[UT_NUM_COUNTERS];
+	atomic_t alarm_fired[UT_NUM_COUNTERS];	/* ALARM: compare match pending */
+	atomic_t events_enabled;		/* Guard: set after events_configure */
+	unsigned long cc_int_pending;		/* Software pending flag for late detection */
 	struct work_struct work;
 	struct workqueue_struct *wq;
 	unsigned long pending_channels;
+	u32 ced_freq;
+	atomic_t target_overflow_count[UT_NUM_COUNTERS];
+	u32 target_compare_value[UT_NUM_COUNTERS];
+	enum counter_count_mode requested_mode[UT_NUM_COUNTERS];
+	u32 requested_ceiling[UT_NUM_COUNTERS];
 };
 
 #define COUNTER_COMP_STATUS_TIME(_name, _read)	\
@@ -66,8 +64,10 @@ struct utimer_cnt {
 	.name = (_name),			\
 	.count_u64_read = (_read),		\
 }
+
 #define COUNTER_COMP_READ_STATUS_TIME(_read)	\
 	COUNTER_COMP_STATUS_TIME("counter_status", _read)
+
 #define COUNTER_COMP_DIRECTION_RW(_read, _write)	\
 {							\
 	.type = COUNTER_COMP_COUNT_DIRECTION,		\
@@ -75,6 +75,7 @@ struct utimer_cnt {
 	.count_u32_read = (_read),			\
 	.count_u8_write = (_write),			\
 }
+
 #define COUNTER_COMP_RUNNING(_read, _write)		\
 	COUNTER_COMP_COUNT_BOOL("running", _read, _write)
 
@@ -84,8 +85,8 @@ enum utimer_count_function {
 };
 
 static const enum counter_function utimer_count_functions[] = {
-		COUNTER_FUNCTION_INCREASE,
-		COUNTER_FUNCTION_DECREASE,
+	COUNTER_FUNCTION_INCREASE,
+	COUNTER_FUNCTION_DECREASE,
 };
 
 enum utimer_synapse_action {
@@ -104,17 +105,16 @@ enum utimer_synapse_action {
 };
 
 static const int ut_default_irq[MAX_INTERRUPTS] = {
-			[0 ... MAX_INTERRUPTS - 1] = -EINVAL,
+	[0 ... MAX_INTERRUPTS - 1] = -EINVAL,
 };
 
 enum ut_count_mode {
-		UT_CNT_MODE_SAWTOOTH = 0,
-		UT_CNT_MODE_TRIANGLE,
+	UT_CNT_MODE_SAWTOOTH = 0,
+	UT_CNT_MODE_TRIANGLE,
 };
 
 static int ut_counter_status_time_read(struct counter_device *counter,
-				struct counter_count *count,
-				u64 *val)
+				       struct counter_count *count, u64 *val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 	struct device *dev = &ut->pdev->dev;
@@ -122,18 +122,86 @@ static int ut_counter_status_time_read(struct counter_device *counter,
 	u64 elapsed = atomic64_read(&ut->elapsed_time_ms[count->id]);
 
 	dev_info(dev, "UTIMER channel %d: %s (ms)\n",
-		count->id, status ? "Overflow" : "Underflow");
+		 count->id, status ? "Overflow" : "Underflow");
 	*val = elapsed;
 	return 0;
 }
 
-static int counter_dir_write(struct counter_device *counter,
-				struct counter_count *count,
-				u8 val)
+/* ALARM: Read alarm status. Returns 1 if alarm fired since last read, 0 otherwise.
+ * Clears on read (edge detection).
+ */
+static int utimer_alarm_read(struct counter_device *counter,
+			     struct counter_count *count, u64 *val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int ctrl;
+
+	*val = atomic_read(&ut->alarm_fired[count->id]);
+	atomic_set(&ut->alarm_fired[count->id], 0);  /* clear on read */
+	return 0;
+}
+
+static int utimer_compare_read(struct counter_device *counter,
+			       struct counter_count *count, u64 *val)
+{
+	struct utimer_cnt *const ut = counter_priv(counter);
+
+	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
+	*val = readl(ut->chan_base + UT_COMPARE_A);
+	return 0;
+}
+
+/* ALARM: Write compare value and ENABLE compare match interrupt hardware */
+static int utimer_compare_write(struct counter_device *counter,
+				struct counter_count *count, u64 val)
+{
+	struct utimer_cnt *const ut = counter_priv(counter);
 	unsigned long flags;
+	u32 ctrl, mask, current_val, diff;
+
+	if (val > U32_MAX)
+		return -EINVAL;
+
+	spin_lock_irqsave(&ut->lock, flags);
+	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
+
+	/* Write compare value */
+	writel((u32)val, ut->chan_base + UT_COMPARE_A);
+
+	/* Reset target overflow count for standard one-shot compare writes */
+	atomic_set(&ut->target_overflow_count[count->id], 0);
+
+	/* ALARM: Enable compare match drive control */
+	ctrl = readl(ut->chan_base + UT_COMPARE_CTRL_A);
+	ctrl |= COMPARE_CTRL_DRV_COMPARE_EN;
+	writel(ctrl, ut->chan_base + UT_COMPARE_CTRL_A);
+
+	/* ALARM: Clear any pending stale interrupt */
+	writel(CHAN_INTERRUPT_COMPARE_MATCH, ut->chan_base + UT_CHAN_INT);
+
+	/* ALARM: Unmask compare match interrupt */
+	mask = readl(ut->chan_base + UT_CHAN_INT_MASK);
+	mask &= ~CHAN_INTERRUPT_COMPARE_MATCH;
+	writel(mask, ut->chan_base + UT_CHAN_INT_MASK);
+
+	/* LATE DETECTION ALGORITHM */
+	current_val = readl(ut->chan_base + UT_CNTR);
+	diff = (u32)val - current_val;
+
+	if (diff > (U32_MAX - UTIMER_LATE_DETECTION_TICKS)) {
+		set_bit(count->id, &ut->cc_int_pending);
+		irq_set_irqchip_state(ut->irq[count->id], IRQCHIP_STATE_PENDING, true);
+	}
+
+	spin_unlock_irqrestore(&ut->lock, flags);
+	return 0;
+}
+
+static int counter_dir_write(struct counter_device *counter,
+			     struct counter_count *count, u8 val)
+{
+	struct utimer_cnt *const ut = counter_priv(counter);
+	unsigned long flags;
+	unsigned int ctrl;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
 	spin_lock_irqsave(&ut->lock, flags);
@@ -147,8 +215,7 @@ static int counter_dir_write(struct counter_device *counter,
 	return 0;
 }
 
-static void utimer_irq_clear(struct utimer_cnt *ut, int channel,
-					bool is_overflow)
+static void utimer_irq_clear(struct utimer_cnt *ut, int channel, bool is_overflow)
 {
 	u32 irq_clear;
 
@@ -159,10 +226,13 @@ static void utimer_irq_clear(struct utimer_cnt *ut, int channel,
 
 static void ut_clear_interrupt(struct utimer_cnt *ut, int channel)
 {
-	unsigned int ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
-	bool is_up_counter = !(ctrl & CNTR_DIR);
+	unsigned int ctrl;
+	bool is_up_counter;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (channel + 1);
+	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
+	is_up_counter = !(ctrl & CNTR_DIR);
+
 	if (is_up_counter)
 		writel(CHAN_INTERRUPT_OVER_FLOW, ut->chan_base + UT_CHAN_INT);
 	else
@@ -171,34 +241,48 @@ static void ut_clear_interrupt(struct utimer_cnt *ut, int channel)
 
 static void ut_mask_interrupt(struct utimer_cnt *ut, int channel)
 {
-	unsigned int ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
-	bool is_up_counter = !(ctrl & CNTR_DIR);
-	u32 mask_reg = readl(ut->chan_base + UT_CHAN_INT_MASK);
+	unsigned int ctrl;
+	u32 mask_reg;
+	bool is_up_counter;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (channel + 1);
+
+	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
+	is_up_counter = !(ctrl & CNTR_DIR);
+
+	mask_reg = readl(ut->chan_base + UT_CHAN_INT_MASK);
+
 	if (is_up_counter)
 		mask_reg |= CHAN_INTERRUPT_OVER_FLOW;
 	else
 		mask_reg |= CHAN_INTERRUPT_UNDER_FLOW;
+
 	writel(mask_reg, ut->chan_base + UT_CHAN_INT_MASK);
 }
 
 static void ut_unmask_interrupt(struct utimer_cnt *ut, int channel)
 {
-	unsigned int ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
-	bool is_up_counter = !(ctrl & CNTR_DIR);
-	u32 mask_reg = readl(ut->chan_base + UT_CHAN_INT_MASK);
+	unsigned int ctrl;
+	u32 mask_reg;
+	bool is_up_counter;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (channel + 1);
+
+	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
+	is_up_counter = !(ctrl & CNTR_DIR);
+
+	mask_reg = readl(ut->chan_base + UT_CHAN_INT_MASK);
+
 	if (is_up_counter)
 		mask_reg &= ~CHAN_INTERRUPT_OVER_FLOW;
 	else
 		mask_reg &= ~CHAN_INTERRUPT_UNDER_FLOW;
+
 	writel(mask_reg, ut->chan_base + UT_CHAN_INT_MASK);
 }
 
 static inline void utimer_calculate_elapsed_time(struct utimer_cnt *ut,
-					int channel, bool is_overflow)
+						 int channel, bool is_overflow)
 {
 	ktime_t now = ut->irq_timestamp[channel];
 	u64 elapsed_ms = ktime_to_ms(ktime_sub(now, ut->start_time[channel]));
@@ -210,9 +294,9 @@ static inline void utimer_calculate_elapsed_time(struct utimer_cnt *ut,
 static void utimer_work_handler(struct work_struct *work)
 {
 	struct utimer_cnt *ut = container_of(work, struct utimer_cnt, work);
-	u32 channel;
-	bool is_overflow;
 	unsigned long flags;
+	bool is_overflow;
+	u32 channel;
 
 	spin_lock_irqsave(&ut->lock, flags);
 	for_each_set_bit(channel, &ut->pending_channels, UT_NUM_COUNTERS) {
@@ -226,22 +310,16 @@ static void utimer_work_handler(struct work_struct *work)
 static irqreturn_t utimer_irq_handler(int irq, void *dev_id)
 {
 	struct utimer_cnt *ut = dev_id;
-	u32 channel;
 	unsigned long flags;
-	u32 running_status;
+	u32 running_status, channel;
 
-	if (unlikely(!ut || !ut->base))
-		return IRQ_NONE;
 	running_status = readl(ut->base + UT_GLB_CNTR_RUNNING);
-	if (unlikely(!running_status)) {
-		spin_unlock_irqrestore(&ut->lock, flags);
+	if (unlikely(!running_status))
 		return IRQ_NONE;
-	}
 	for (channel = 0; channel < UT_NUM_COUNTERS; channel++) {
-		u32 irq_check;
-		u32 irq_mask;
-		bool overflow = false;
-		bool underflow = false;
+		u32 irq_check, irq_mask;
+		bool overflow = false, underflow = false;
+		bool sw_pending = false;
 
 		ut->chan_base = ut->base + UTIMER_OFFSET * (channel + 1);
 		if (!(running_status & BIT(channel)))
@@ -249,18 +327,97 @@ static irqreturn_t utimer_irq_handler(int irq, void *dev_id)
 		spin_lock_irqsave(&ut->lock, flags);
 		irq_check = readl(ut->chan_base + UT_CHAN_INT);
 		irq_mask = readl(ut->chan_base + UT_CHAN_INT_MASK);
-		/* Check for overflow condition */
 		overflow = (irq_check & CHAN_INTERRUPT_OVER_FLOW) &&
-				!(irq_mask & CHAN_INTERRUPT_OVER_FLOW);
-		/* Check for underflow condition */
+			   !(irq_mask & CHAN_INTERRUPT_OVER_FLOW);
 		underflow = (irq_check & CHAN_INTERRUPT_UNDER_FLOW) &&
-				!(irq_mask & CHAN_INTERRUPT_UNDER_FLOW);
+			    !(irq_mask & CHAN_INTERRUPT_UNDER_FLOW);
+		sw_pending = test_and_clear_bit(channel, &ut->cc_int_pending);
+		/* ALARM: Set alarm_fired when compare match occurs or via software bypass */
+		if (sw_pending ||
+		    ((irq_check & CHAN_INTERRUPT_COMPARE_MATCH) &&
+		     !(irq_mask & CHAN_INTERRUPT_COMPARE_MATCH))) {
+			if (!sw_pending)
+				writel(CHAN_INTERRUPT_COMPARE_MATCH, ut->chan_base + UT_CHAN_INT);
+			int ovf_cnt = atomic_read(&ut->target_overflow_count[channel]);
+
+			if (ovf_cnt > 0) {
+				/* Simulated overflow via COMPARE_MATCH! */
+				ovf_cnt--;
+				if (ovf_cnt == 0) {
+					u32 current_val, diff;
+
+					/* Arm the final target! */
+					writel(ut->target_compare_value[channel],
+					       ut->chan_base + UT_COMPARE_A);
+					/* Late detection to ensure we didn't just miss it */
+					current_val = readl(ut->chan_base + UT_CNTR);
+					diff = ut->target_compare_value[channel] - current_val;
+					if (diff > (U32_MAX - UTIMER_LATE_DETECTION_TICKS)) {
+						set_bit(channel, &ut->cc_int_pending);
+						irq_set_irqchip_state(ut->irq[channel],
+								      IRQCHIP_STATE_PENDING, true);
+					}
+				} else {
+					/* Wait for another simulated overflow chunk */
+					writel(0xFFFFFFFF, ut->chan_base + UT_COMPARE_A);
+				}
+				/* Re-enable COMPARE_EN in case hardware cleared it on match */
+				writel(readl(ut->chan_base + UT_COMPARE_CTRL_A) |
+				       COMPARE_CTRL_DRV_COMPARE_EN,
+				       ut->chan_base + UT_COMPARE_CTRL_A);
+				atomic_set(&ut->target_overflow_count[channel], ovf_cnt);
+			} else {
+				/* Disable compare match hardware after one-shot alarm fires */
+				writel(readl(ut->chan_base + UT_COMPARE_CTRL_A) &
+				       ~COMPARE_CTRL_DRV_COMPARE_EN,
+				       ut->chan_base + UT_COMPARE_CTRL_A);
+				writel(readl(ut->chan_base + UT_CHAN_INT_MASK) |
+				       CHAN_INTERRUPT_COMPARE_MATCH,
+				       ut->chan_base + UT_CHAN_INT_MASK);
+				/* ALARM: Set flag for this channel */
+				atomic_set(&ut->alarm_fired[channel], 1);
+
+				/* Only push event if events have been configured */
+				if (atomic_read(&ut->events_enabled))
+					counter_push_event(ut->counter_dev,
+							   COUNTER_EVENT_THRESHOLD,
+							   channel);
+			}
+		}
 		if (overflow || underflow) {
 			utimer_irq_clear(ut, channel, overflow);
-			ut->irq_timestamp[channel] = ktime_get();
-			atomic_set(&ut->ut_counter_status[channel], overflow ? 1 : 0);
-			set_bit(channel, &ut->pending_channels);
+			/* Software emulation for true "Range Limit" stop-at-ceiling behavior */
+			if (overflow) {
+				if (ut->requested_mode[channel] == COUNTER_COUNT_MODE_RANGE_LIMIT) {
+					u32 ceiling = readl(ut->chan_base + UT_CNTR_PTR);
+					u32 stop_val = readl(ut->base + UT_GLB_CNTR_STOP) |
+						       BIT(channel);
+					/* Stop the counter and clear run bit */
+					writel(stop_val, ut->base + UT_GLB_CNTR_STOP);
+					writel(stop_val, ut->base + UT_GLB_CNTR_CLEAR);
+					/* Mask interrupt so it doesn't fire again */
+					ut_mask_interrupt(ut, channel);
+					/* Override the count register with the ceiling value */
+					writel(ceiling, ut->chan_base + UT_CNTR);
+				} else if (ut->requested_mode[channel] ==
+					   COUNTER_COUNT_MODE_NON_RECYCLE) {
+					/* Stop the counter and clear run bit */
+					u32 stop_val = readl(ut->base + UT_GLB_CNTR_STOP) |
+						       BIT(channel);
+					writel(stop_val, ut->base + UT_GLB_CNTR_STOP);
+					writel(stop_val, ut->base + UT_GLB_CNTR_CLEAR);
+					/* Mask interrupt so it doesn't fire again */
+					ut_mask_interrupt(ut, channel);
+					/* Override the count register with the MAX 32-bit value */
+					writel(0xFFFFFFFF, ut->chan_base + UT_CNTR);
+				}
+			}
 		}
+		if (atomic_read(&ut->events_enabled))
+			counter_push_event(ut->counter_dev,
+					   overflow ? COUNTER_EVENT_OVERFLOW :
+					   COUNTER_EVENT_UNDERFLOW,
+					   channel);
 		spin_unlock_irqrestore(&ut->lock, flags);
 	}
 	if (ut->pending_channels)
@@ -268,22 +425,9 @@ static irqreturn_t utimer_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int ut_get_mode(struct counter_device *counter,
-			struct counter_count *count)
-{
-	const u32 id = (count->id + 1);
-	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int mode, ctrl;
-	ut->chan_base = ut->base + UTIMER_OFFSET * id;
-
-	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
-	mode = ((ctrl >> CNTR_TYPE_SHIFT) & CNTR_TYPE_MASK);
-	return mode;
-}
-
 static int ut_get_dir(struct counter_device *counter,
-			struct counter_count *count,
-			enum counter_count_direction *dir)
+		      struct counter_count *count,
+		      enum counter_count_direction *dir)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 	unsigned int ud_flag;
@@ -291,24 +435,26 @@ static int ut_get_dir(struct counter_device *counter,
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
 	ud_flag = readl(ut->chan_base + UT_CNTR_CTRL) & CNTR_DIR;
 	*dir = (ud_flag) ? COUNTER_COUNT_DIRECTION_BACKWARD :
-			COUNTER_COUNT_DIRECTION_FORWARD;
+			   COUNTER_COUNT_DIRECTION_FORWARD;
 	return 0;
 }
 
 static int ut_get_ptr(struct counter_device *counter,
-			struct counter_count *count,
-			u64 *ptr)
+		      struct counter_count *count, u64 *ptr)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
-	*ptr = readl(ut->chan_base + UT_CNTR_PTR);
+	if (ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NON_RECYCLE ||
+	    ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NORMAL)
+		*ptr = ut->requested_ceiling[count->id];
+	else
+		*ptr = readl(ut->chan_base + UT_CNTR_PTR);
 	return 0;
 }
 
 static int ut_count_read(struct counter_device *counter,
-			struct counter_count *count,
-			u64 *val)
+			 struct counter_count *count, u64 *val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 
@@ -318,18 +464,18 @@ static int ut_count_read(struct counter_device *counter,
 }
 
 static int ut_count_write(struct counter_device *counter,
-		struct counter_count *count,
-		u64 val)
+			  struct counter_count *count, u64 val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int ctrl;
 	unsigned long flags;
+	unsigned int ctrl;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
 	if (val > U32_MAX) {
 		dev_err(&ut->pdev->dev, "Value too large for 32-bit register\n");
 		return -EINVAL;
 	}
+
 	spin_lock_irqsave(&ut->lock, flags);
 	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
 	ctrl &= ~CNTR_START;
@@ -340,28 +486,28 @@ static int ut_count_write(struct counter_device *counter,
 }
 
 static int ut_function_get(struct counter_device *counter,
-			struct counter_count *count,
-			enum counter_function *function)
+			   struct counter_count *count,
+			   enum counter_function *function)
 {
 	enum counter_count_direction dir;
 	u32 err;
-	unsigned int mode;
 
-	mode = ut_get_mode(counter, count);
 	err = ut_get_dir(counter, count, &dir);
 	if (err)
 		return err;
+
 	if (dir == COUNTER_COUNT_DIRECTION_FORWARD)
 		*function = COUNTER_FUNCTION_INCREASE;
 	else
 		*function = COUNTER_FUNCTION_DECREASE;
+
 	return 0;
 }
 
 static int ut_action_get(struct counter_device *counter,
-			struct counter_count *count,
-			struct counter_synapse *synapse,
-			enum counter_synapse_action *action)
+			 struct counter_count *count,
+			 struct counter_synapse *synapse,
+			 enum counter_synapse_action *action)
 {
 	enum counter_function function;
 	u32 err;
@@ -369,6 +515,7 @@ static int ut_action_get(struct counter_device *counter,
 	err = ut_function_get(counter, count, &function);
 	if (err)
 		return err;
+
 	*action = COUNTER_SYNAPSE_ACTION_NONE;
 	switch (function) {
 	case COUNTER_FUNCTION_INCREASE:
@@ -385,51 +532,55 @@ static int ut_action_get(struct counter_device *counter,
 }
 
 static int utimer_count_mode_get(struct counter_device *counter,
-		struct counter_count *count,
-		enum counter_count_mode *cnt_mode)
+				 struct counter_count *count,
+				 enum counter_count_mode *cnt_mode)
 {
-	unsigned int mode;
-	mode = ut_get_mode(counter, count);
+	struct utimer_cnt *const ut = counter_priv(counter);
 
-	switch (mode) {
-	case 0:
-		*cnt_mode = COUNTER_COUNT_MODE_NORMAL;
-		break;
-	case 1:
-		*cnt_mode = COUNTER_COUNT_MODE_RANGE_LIMIT;
-		break;
-	case 2:
-		*cnt_mode = COUNTER_COUNT_MODE_NON_RECYCLE;
-		break;
-	case 3:
-		*cnt_mode = COUNTER_COUNT_MODE_MODULO_N;
-		break;
-	default:
-		return -EINVAL;
-	}
+	*cnt_mode = ut->requested_mode[count->id];
 	return 0;
 }
 
 static int utimer_count_mode_set(struct counter_device *counter,
-				struct counter_count *count,
-				enum counter_count_mode cnt_mode)
+				 struct counter_count *count,
+				 enum counter_count_mode cnt_mode)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int val;
+	unsigned int val, hw_mode;
 	unsigned long flags;
 
+	if (cnt_mode == COUNTER_COUNT_MODE_RANGE_LIMIT ||
+	    cnt_mode == COUNTER_COUNT_MODE_NON_RECYCLE)
+		hw_mode = 1;
+	else
+		hw_mode = 0;
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
 	spin_lock_irqsave(&ut->lock, flags);
+	if (cnt_mode == COUNTER_COUNT_MODE_NON_RECYCLE || cnt_mode == COUNTER_COUNT_MODE_NORMAL) {
+		if (ut->requested_mode[count->id] != COUNTER_COUNT_MODE_NON_RECYCLE &&
+		    ut->requested_mode[count->id] != COUNTER_COUNT_MODE_NORMAL) {
+			ut->requested_ceiling[count->id] = readl(ut->chan_base + UT_CNTR_PTR);
+			writel(0xFFFFFFFF, ut->chan_base + UT_CNTR_PTR);
+		} else {
+			writel(0xFFFFFFFF, ut->chan_base + UT_CNTR_PTR);
+		}
+	} else {
+		if (ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NON_RECYCLE ||
+		    ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NORMAL) {
+			writel(ut->requested_ceiling[count->id], ut->chan_base + UT_CNTR_PTR);
+		}
+	}
 	val = readl(ut->chan_base + UT_CNTR_CTRL);
-	val |= cnt_mode << CNTR_TYPE_SHIFT;
+	val &= ~(CNTR_TYPE_MASK << CNTR_TYPE_SHIFT);
+	val |= hw_mode << CNTR_TYPE_SHIFT;
 	writel(val, ut->chan_base + UT_CNTR_CTRL);
+	ut->requested_mode[count->id] = cnt_mode;
 	spin_unlock_irqrestore(&ut->lock, flags);
 	return 0;
 }
 
 static int utimer_count_enable_read(struct counter_device *counter,
-				struct counter_count *count,
-				u8 *enable)
+				    struct counter_count *count, u8 *enable)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 
@@ -439,12 +590,11 @@ static int utimer_count_enable_read(struct counter_device *counter,
 }
 
 static int utimer_count_enable_write(struct counter_device *counter,
-				struct counter_count *count,
-				u8 enable)
+				     struct counter_count *count, u8 enable)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int val;
 	unsigned long flags;
+	unsigned int val;
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
 	spin_lock_irqsave(&ut->lock, flags);
@@ -459,15 +609,13 @@ static int utimer_count_enable_write(struct counter_device *counter,
 }
 
 static int utimer_count_ptr_read(struct counter_device *counter,
-				struct counter_count *count,
-				u64 *ptr)
+				 struct counter_count *count, u64 *ptr)
 {
 	return ut_get_ptr(counter, count, ptr);
 }
 
 static int utimer_count_ptr_write(struct counter_device *counter,
-				struct counter_count *count,
-				u64 ptr)
+				  struct counter_count *count, u64 ptr)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 	unsigned long flags;
@@ -478,14 +626,19 @@ static int utimer_count_ptr_write(struct counter_device *counter,
 		return -EINVAL;
 	}
 	spin_lock_irqsave(&ut->lock, flags);
-	writel((unsigned int)ptr, ut->chan_base + UT_CNTR_PTR);
+	if (ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NON_RECYCLE ||
+	    ut->requested_mode[count->id] == COUNTER_COUNT_MODE_NORMAL) {
+		ut->requested_ceiling[count->id] = (unsigned int)ptr;
+		writel(0xFFFFFFFF, ut->chan_base + UT_CNTR_PTR);
+	} else {
+		writel((unsigned int)ptr, ut->chan_base + UT_CNTR_PTR);
+	}
 	spin_unlock_irqrestore(&ut->lock, flags);
 	return 0;
 }
 
 static int utimer_count_running_read(struct counter_device *counter,
-			struct counter_count *count,
-			u8 *val)
+				     struct counter_count *count, u8 *val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
 
@@ -494,12 +647,11 @@ static int utimer_count_running_read(struct counter_device *counter,
 }
 
 static int utimer_count_running_write(struct counter_device *counter,
-				struct counter_count *count,
-				u8 val)
+				      struct counter_count *count, u8 val)
 {
 	struct utimer_cnt *const ut = counter_priv(counter);
-	unsigned int reg_val;
 	unsigned long flags;
+	unsigned int reg_val;
 
 	spin_lock_irqsave(&ut->lock, flags);
 	ut->start_time[count->id] = ktime_get();
@@ -519,13 +671,96 @@ static int utimer_count_running_write(struct counter_device *counter,
 	return 0;
 }
 
+/* ==========================================================
+ * GENERIC ALARM INTERFACE
+ * ==========================================================
+ */
+static int utimer_delay_alarm_read(struct counter_device *counter,
+				   struct counter_count *count,
+				   u64 *val)
+{
+	*val = 0;
+	return 0;
+}
+
+static int utimer_delay_alarm_write(struct counter_device *counter,
+				    struct counter_count *count, u64 val)
+{
+	struct utimer_cnt *const ut = counter_priv(counter);
+	u64 total_ticks;
+	u32 target_compare, required_overflows, current_cnt;
+	unsigned long flags;
+
+	if (val == 0)
+		return -EINVAL;
+	/* Auto-detect seconds vs ticks:
+	 * If val is <= 10,000,000, we treat it as relative seconds.
+	 * Else, treat it as relative hardware ticks directly.
+	 */
+	if (val <= 10000000ULL)
+		total_ticks = val * ut->ced_freq;
+	else
+		total_ticks = val;
+	required_overflows = (u32)(total_ticks >> 32);
+
+	spin_lock_irqsave(&ut->lock, flags);
+	ut->chan_base = ut->base + UTIMER_OFFSET * (count->id + 1);
+	current_cnt = readl(ut->chan_base + UT_CNTR);
+	target_compare = current_cnt + (u32)total_ticks;
+	if (target_compare < current_cnt)
+		required_overflows++;
+	ut->target_compare_value[count->id] = target_compare;
+	if (required_overflows == 0) {
+		u32 current_val, diff;
+
+		writel(target_compare, ut->chan_base + UT_COMPARE_A);
+		writel(readl(ut->chan_base + UT_COMPARE_CTRL_A) |
+		       COMPARE_CTRL_DRV_COMPARE_EN,
+		       ut->chan_base + UT_COMPARE_CTRL_A);
+		writel(CHAN_INTERRUPT_COMPARE_MATCH, ut->chan_base + UT_CHAN_INT);
+		writel(readl(ut->chan_base + UT_CHAN_INT_MASK) &
+		       ~CHAN_INTERRUPT_COMPARE_MATCH,
+		       ut->chan_base + UT_CHAN_INT_MASK);
+		atomic_set(&ut->target_overflow_count[count->id], 0);
+
+		/* Late detection algorithm */
+		current_val = readl(ut->chan_base + UT_CNTR);
+		diff = target_compare - current_val;
+		if (diff > (U32_MAX - UTIMER_LATE_DETECTION_TICKS)) {
+			set_bit(count->id, &ut->cc_int_pending);
+			irq_set_irqchip_state(ut->irq[count->id], IRQCHIP_STATE_PENDING, true);
+		}
+	} else {
+		u32 cnt_ctrl;
+
+		atomic_set(&ut->target_overflow_count[count->id], required_overflows);
+		/* Force Sawtooth mode & UP counting */
+		cnt_ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
+		cnt_ctrl &= ~(CNTR_TYPE_MASK << CNTR_TYPE_SHIFT);
+		cnt_ctrl &= ~CNTR_DIR;
+		writel(cnt_ctrl, ut->chan_base + UT_CNTR_CTRL);
+		writel(0xFFFFFFFF, ut->chan_base + UT_CNTR_PTR);
+		writel(0xFFFFFFFF, ut->chan_base + UT_COMPARE_A);
+		writel(readl(ut->chan_base + UT_COMPARE_CTRL_A) | COMPARE_CTRL_DRV_COMPARE_EN,
+		       ut->chan_base + UT_COMPARE_CTRL_A);
+		writel(CHAN_INTERRUPT_COMPARE_MATCH, ut->chan_base + UT_CHAN_INT);
+		writel(readl(ut->chan_base + UT_CHAN_INT_MASK) & ~CHAN_INTERRUPT_COMPARE_MATCH,
+		       ut->chan_base + UT_CHAN_INT_MASK);
+	}
+	spin_unlock_irqrestore(&ut->lock, flags);
+
+	return 0;
+}
+
 static const enum counter_count_mode utimer_cnt_modes[] = {
 	COUNTER_COUNT_MODE_NORMAL,
 	COUNTER_COUNT_MODE_RANGE_LIMIT,
 	COUNTER_COUNT_MODE_NON_RECYCLE,
 	COUNTER_COUNT_MODE_MODULO_N,
 };
+
 static DEFINE_COUNTER_AVAILABLE(utimer_count_mode_available, utimer_cnt_modes);
+/* ALARM: Added "alarm" attribute to extension array */
 static struct counter_comp utimer_count_ext[] = {
 	COUNTER_COMP_CEILING(utimer_count_ptr_read, utimer_count_ptr_write),
 	COUNTER_COMP_COUNT_MODE(utimer_count_mode_get,
@@ -533,9 +768,12 @@ static struct counter_comp utimer_count_ext[] = {
 				utimer_count_mode_available),
 	COUNTER_COMP_DIRECTION_RW(ut_get_dir, counter_dir_write),
 	COUNTER_COMP_ENABLE(utimer_count_enable_read,
-				utimer_count_enable_write),
+			    utimer_count_enable_write),
 	COUNTER_COMP_RUNNING(utimer_count_running_read, utimer_count_running_write),
 	COUNTER_COMP_READ_STATUS_TIME(ut_counter_status_time_read),
+	COUNTER_COMP_COUNT_U64("compare_value", utimer_compare_read, utimer_compare_write),
+	COUNTER_COMP_COUNT_U64("alarm", utimer_alarm_read, NULL),
+	COUNTER_COMP_COUNT_U64("delay_alarm", utimer_delay_alarm_read, utimer_delay_alarm_write),
 };
 
 #define UT_EVENTS_IN_FOR_CHANNEL_A(ch)	\
@@ -556,38 +794,22 @@ static struct counter_signal utimer_signals[] = {
 	{ .id = 9, .name = "comp3_filter_out" },
 	{ .id = 10, .name = "comp2_filter_out" },
 	{ .id = 11, .name = "comp1_filter_out" },
-	UT_EVENTS_IN_FOR_CHANNEL_A(0),
-	UT_EVENTS_IN_FOR_CHANNEL_B(0),
-	UT_EVENTS_IN_FOR_CHANNEL_A(1),
-	UT_EVENTS_IN_FOR_CHANNEL_B(1),
-	UT_EVENTS_IN_FOR_CHANNEL_A(2),
-	UT_EVENTS_IN_FOR_CHANNEL_B(2),
-	UT_EVENTS_IN_FOR_CHANNEL_A(3),
-	UT_EVENTS_IN_FOR_CHANNEL_B(3),
-	UT_EVENTS_IN_FOR_CHANNEL_A(4),
-	UT_EVENTS_IN_FOR_CHANNEL_B(4),
-	UT_EVENTS_IN_FOR_CHANNEL_A(5),
-	UT_EVENTS_IN_FOR_CHANNEL_B(5),
-	UT_EVENTS_IN_FOR_CHANNEL_A(6),
-	UT_EVENTS_IN_FOR_CHANNEL_B(6),
-	UT_EVENTS_IN_FOR_CHANNEL_A(7),
-	UT_EVENTS_IN_FOR_CHANNEL_B(7),
-	UT_EVENTS_IN_FOR_CHANNEL_A(8),
-	UT_EVENTS_IN_FOR_CHANNEL_B(8),
-	UT_EVENTS_IN_FOR_CHANNEL_A(9),
-	UT_EVENTS_IN_FOR_CHANNEL_B(9),
-	UT_EVENTS_IN_FOR_CHANNEL_A(10),
-	UT_EVENTS_IN_FOR_CHANNEL_B(10),
-	UT_EVENTS_IN_FOR_CHANNEL_A(11),
-	UT_EVENTS_IN_FOR_CHANNEL_B(11),
-	UT_EVENTS_IN_FOR_CHANNEL_A(12),
-	UT_EVENTS_IN_FOR_CHANNEL_B(12),
-	UT_EVENTS_IN_FOR_CHANNEL_A(13),
-	UT_EVENTS_IN_FOR_CHANNEL_B(13),
-	UT_EVENTS_IN_FOR_CHANNEL_A(14),
-	UT_EVENTS_IN_FOR_CHANNEL_B(14),
-	UT_EVENTS_IN_FOR_CHANNEL_A(15),
-	UT_EVENTS_IN_FOR_CHANNEL_B(15),
+	UT_EVENTS_IN_FOR_CHANNEL_A(0), UT_EVENTS_IN_FOR_CHANNEL_B(0),
+	UT_EVENTS_IN_FOR_CHANNEL_A(1), UT_EVENTS_IN_FOR_CHANNEL_B(1),
+	UT_EVENTS_IN_FOR_CHANNEL_A(2), UT_EVENTS_IN_FOR_CHANNEL_B(2),
+	UT_EVENTS_IN_FOR_CHANNEL_A(3), UT_EVENTS_IN_FOR_CHANNEL_B(3),
+	UT_EVENTS_IN_FOR_CHANNEL_A(4), UT_EVENTS_IN_FOR_CHANNEL_B(4),
+	UT_EVENTS_IN_FOR_CHANNEL_A(5), UT_EVENTS_IN_FOR_CHANNEL_B(5),
+	UT_EVENTS_IN_FOR_CHANNEL_A(6), UT_EVENTS_IN_FOR_CHANNEL_B(6),
+	UT_EVENTS_IN_FOR_CHANNEL_A(7), UT_EVENTS_IN_FOR_CHANNEL_B(7),
+	UT_EVENTS_IN_FOR_CHANNEL_A(8), UT_EVENTS_IN_FOR_CHANNEL_B(8),
+	UT_EVENTS_IN_FOR_CHANNEL_A(9), UT_EVENTS_IN_FOR_CHANNEL_B(9),
+	UT_EVENTS_IN_FOR_CHANNEL_A(10), UT_EVENTS_IN_FOR_CHANNEL_B(10),
+	UT_EVENTS_IN_FOR_CHANNEL_A(11), UT_EVENTS_IN_FOR_CHANNEL_B(11),
+	UT_EVENTS_IN_FOR_CHANNEL_A(12), UT_EVENTS_IN_FOR_CHANNEL_B(12),
+	UT_EVENTS_IN_FOR_CHANNEL_A(13), UT_EVENTS_IN_FOR_CHANNEL_B(13),
+	UT_EVENTS_IN_FOR_CHANNEL_A(14), UT_EVENTS_IN_FOR_CHANNEL_B(14),
+	UT_EVENTS_IN_FOR_CHANNEL_A(15), UT_EVENTS_IN_FOR_CHANNEL_B(15),
 };
 
 static const enum counter_synapse_action ut_synapse_trigger_actions[] = {
@@ -617,29 +839,29 @@ static const enum counter_synapse_action ut_synapse_glb_event_actions[] = {
 #define UT_COUNT_SYNAPSE_TRIGGER(id) {				\
 	.actions_list = ut_synapse_trigger_actions,		\
 	.num_actions = ARRAY_SIZE(ut_synapse_trigger_actions),	\
-	.signal = utimer_signals + id				\
+	.signal = utimer_signals + (id)				\
 }
 
-#define UT_COUNT_SYNAPSE_GLB_EVENT(id) {				\
-	.actions_list = ut_synapse_glb_event_actions,			\
-	.num_actions = ARRAY_SIZE(ut_synapse_glb_event_actions),	\
-	.signal = utimer_signals + id					\
+#define UT_COUNT_SYNAPSE_GLB_EVENT(id) {			\
+	.actions_list = ut_synapse_glb_event_actions,		\
+	.num_actions = ARRAY_SIZE(ut_synapse_glb_event_actions),\
+	.signal = utimer_signals + (id)				\
 }
 
-#define UT_COUNT_SYNAPSE_CHAN_EVENT(ch)	{				\
-	.actions_list = ut_synapse_chan_event_actions,			\
-	.num_actions = ARRAY_SIZE(ut_synapse_chan_event_actions),	\
-	.signal = utimer_signals + 12 + (2 * ch)			\
+#define UT_COUNT_SYNAPSE_CHAN_EVENT(ch)	{			\
+	.actions_list = ut_synapse_chan_event_actions,		\
+	.num_actions = ARRAY_SIZE(ut_synapse_chan_event_actions),\
+	.signal = utimer_signals + 12 + (2 * (ch))		\
 }
 
-#define UT_COUNT_SYNAPSES_CHANNEL(ch)	{					\
-	UT_COUNT_SYNAPSE_TRIGGER(0), UT_COUNT_SYNAPSE_TRIGGER(1),		\
-	UT_COUNT_SYNAPSE_TRIGGER(2), UT_COUNT_SYNAPSE_TRIGGER(3),		\
-	UT_COUNT_SYNAPSE_GLB_EVENT(4), UT_COUNT_SYNAPSE_GLB_EVENT(5),		\
-	UT_COUNT_SYNAPSE_GLB_EVENT(6), UT_COUNT_SYNAPSE_GLB_EVENT(7),		\
-	UT_COUNT_SYNAPSE_GLB_EVENT(8), UT_COUNT_SYNAPSE_GLB_EVENT(9),		\
-	UT_COUNT_SYNAPSE_GLB_EVENT(10), UT_COUNT_SYNAPSE_GLB_EVENT(11),		\
-	UT_COUNT_SYNAPSE_CHAN_EVENT(ch),					\
+#define UT_COUNT_SYNAPSES_CHANNEL(ch)	{			\
+	UT_COUNT_SYNAPSE_TRIGGER(0), UT_COUNT_SYNAPSE_TRIGGER(1), \
+	UT_COUNT_SYNAPSE_TRIGGER(2), UT_COUNT_SYNAPSE_TRIGGER(3), \
+	UT_COUNT_SYNAPSE_GLB_EVENT(4), UT_COUNT_SYNAPSE_GLB_EVENT(5), \
+	UT_COUNT_SYNAPSE_GLB_EVENT(6), UT_COUNT_SYNAPSE_GLB_EVENT(7), \
+	UT_COUNT_SYNAPSE_GLB_EVENT(8), UT_COUNT_SYNAPSE_GLB_EVENT(9), \
+	UT_COUNT_SYNAPSE_GLB_EVENT(10), UT_COUNT_SYNAPSE_GLB_EVENT(11), \
+	UT_COUNT_SYNAPSE_CHAN_EVENT(ch), \
 }
 
 static struct counter_synapse utimer_count_synapses[][13] = {
@@ -661,30 +883,30 @@ static struct counter_synapse utimer_count_synapses[][13] = {
 	UT_COUNT_SYNAPSES_CHANNEL(15),
 };
 
-#define UTIMER_COUNT(_id, _cntname) {				\
-	.id = (_id),						\
+#define UTIMER_COUNT(_chan, _cntname, _syn) {			\
+	.id = (_chan),						\
 	.name = (_cntname),					\
 	.functions_list = utimer_count_functions,		\
 	.num_functions = ARRAY_SIZE(utimer_count_functions),	\
-	.synapses = utimer_count_synapses[(_id)],		\
-	.num_synapses =		13,				\
+	.synapses = (_syn),					\
+	.num_synapses = 13,					\
 	.ext = utimer_count_ext,				\
 	.num_ext = ARRAY_SIZE(utimer_count_ext)			\
 }
 
 static struct counter_count utimer_counts[] = {
-	UTIMER_COUNT(0, "Channel 0"),
-	UTIMER_COUNT(1, "Channel 1"),
-	UTIMER_COUNT(2, "Channel 2"),
-	UTIMER_COUNT(3, "Channel 3"),
-	UTIMER_COUNT(4, "Channel 4"),
-	UTIMER_COUNT(5, "Channel 5"),
-	UTIMER_COUNT(6, "Channel 6"),
-	UTIMER_COUNT(7, "Channel 7"),
-	UTIMER_COUNT(8, "Channel 8"),
-	UTIMER_COUNT(9, "Channel 9"),
-	UTIMER_COUNT(10, "Channel 10"),
-	UTIMER_COUNT(11, "Channel 11"),
+	UTIMER_COUNT(0,  "Channel 0",  utimer_count_synapses[0]),
+	UTIMER_COUNT(1,  "Channel 1",  utimer_count_synapses[1]),
+	UTIMER_COUNT(2,  "Channel 2",  utimer_count_synapses[2]),
+	UTIMER_COUNT(3,  "Channel 3",  utimer_count_synapses[3]),
+	UTIMER_COUNT(4,  "Channel 4",  utimer_count_synapses[4]),
+	UTIMER_COUNT(5,  "Channel 5",  utimer_count_synapses[5]),
+	UTIMER_COUNT(6,  "Channel 6",  utimer_count_synapses[6]),
+	UTIMER_COUNT(7,  "Channel 7",  utimer_count_synapses[7]),
+	UTIMER_COUNT(8,  "Channel 8",  utimer_count_synapses[8]),
+	UTIMER_COUNT(9,  "Channel 9",  utimer_count_synapses[9]),
+	UTIMER_COUNT(10, "Channel 10", utimer_count_synapses[10]),
+	UTIMER_COUNT(11, "Channel 11", utimer_count_synapses[11]),
 };
 
 static void utimer_channel_init(struct utimer_cnt *ut, int ch)
@@ -693,15 +915,44 @@ static void utimer_channel_init(struct utimer_cnt *ut, int ch)
 
 	ut->chan_base = ut->base + UTIMER_OFFSET * (ch + 1);
 	writel(CHAN_INTERRUPT_OVER_FLOW | CHAN_INTERRUPT_UNDER_FLOW,
-				ut->chan_base + UT_CHAN_INT);
+	       ut->chan_base + UT_CHAN_INT);
 	writel(CNTR_SRC1_PGM_EN, ut->chan_base + UT_START_1_SRC);
 	writel(CNTR_SRC1_PGM_EN, ut->chan_base + UT_STOP_1_SRC);
 	writel(CNTR_SRC1_PGM_EN, ut->chan_base + UT_CLEAR_1_SRC);
-	writel(~(CHAN_INTERRUPT_OVER_FLOW | CHAN_INTERRUPT_UNDER_FLOW),
-				ut->chan_base + UT_CHAN_INT_MASK);
+	writel((u32)~(CHAN_INTERRUPT_OVER_FLOW | CHAN_INTERRUPT_UNDER_FLOW),
+	       ut->chan_base + UT_CHAN_INT_MASK);
 	ctrl = readl(ut->chan_base + UT_CNTR_CTRL);
 	ctrl &= ~CNTR_DIR;
 	writel(ctrl, ut->chan_base + UT_CNTR_CTRL);
+}
+
+static int utimer_events_configure(struct counter_device *counter)
+{
+	struct utimer_cnt *const ut = counter_priv(counter);
+	struct counter_event_node *event_node;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ut->lock, flags);
+
+	list_for_each_entry(event_node, &counter->events_list, l) {
+		if (event_node->event == COUNTER_EVENT_THRESHOLD) {
+			u32 chan_id = event_node->channel;
+			u32 ctrl, mask;
+
+			ut->chan_base = ut->base + UTIMER_OFFSET * (chan_id + 1);
+			ctrl = readl(ut->chan_base + UT_COMPARE_CTRL_A);
+			ctrl |= COMPARE_CTRL_DRV_COMPARE_EN;
+			writel(ctrl, ut->chan_base + UT_COMPARE_CTRL_A);
+			writel(CHAN_INTERRUPT_COMPARE_MATCH, ut->chan_base + UT_CHAN_INT);
+			mask = readl(ut->chan_base + UT_CHAN_INT_MASK);
+			mask &= ~CHAN_INTERRUPT_COMPARE_MATCH;
+			writel(mask, ut->chan_base + UT_CHAN_INT_MASK);
+		}
+	}
+	spin_unlock_irqrestore(&ut->lock, flags);
+	/* Mark events as enabled so IRQ handler knows it's safe to push */
+	atomic_set(&ut->events_enabled, 1);
+	return 0;
 }
 
 static const struct counter_ops utimer_ops = {
@@ -709,6 +960,7 @@ static const struct counter_ops utimer_ops = {
 	.count_write = ut_count_write,
 	.function_read = ut_function_get,
 	.action_read = ut_action_get,
+	.events_configure = utimer_events_configure,
 };
 
 static int utimer_probe(struct platform_device *pdev)
@@ -725,6 +977,7 @@ static int utimer_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 	ut = counter_priv(counter);
+	ut->counter_dev = counter;	/* Store real counter for IRQ handler */
 	platform_set_drvdata(pdev, ut);
 	ut->pdev = pdev;
 	spin_lock_init(&ut->lock);
@@ -750,35 +1003,46 @@ static int utimer_probe(struct platform_device *pdev)
 	}
 	INIT_WORK(&ut->work, utimer_work_handler);
 	ut->pending_channels = 0;
+	ut->cc_int_pending = 0;
 	for (i = 0; i < UT_NUM_COUNTERS; i++) {
 		ut->start_time[i] = ktime_set(0, 0);
 		ut->irq_timestamp[i] = ktime_set(0, 0);
+		/* ALARM: Initialize alarm_fired */
+		atomic_set(&ut->alarm_fired[i], 0);
+		atomic_set(&ut->events_enabled, 0);
+		atomic_set(&ut->target_overflow_count[i], 0);
+		ut->target_compare_value[i] = 0;
 		utimer_channel_init(ut, i);
+		ut->requested_mode[i] = COUNTER_COUNT_MODE_NORMAL;
+		ut->requested_ceiling[i] = 0xFFFFFFFF;
 		atomic_set(&ut->ut_counter_status[i], DEFAULT_COUNTER_STATUS);
 		atomic64_set(&ut->elapsed_time_ms[i], DEFAULT_ELAPSED_TIME);
 	}
 	for (i = 0; i < MAX_INTERRUPTS; i++) {
-		ut->irq[i] = platform_get_irq(pdev, i);
-		if (ut->irq[i] < 0) {
-			ret = ut->irq[i];
-			dev_err(dev, "Failed to get IRQ %d\n", i);
-			goto err_free_wq;
+		int irq_num = platform_get_irq(pdev, i);
+
+		if (irq_num < 0) {
+			dev_err(dev, "Error: Missing IRQ %d, stopping search. Only registered %d interrupts\n",
+				i, i);
+			break;
 		}
+		ut->irq[i] = irq_num;
 		ret = devm_request_irq(dev, ut->irq[i], utimer_irq_handler,
-				IRQF_SHARED, dev_name(dev), ut);
+				       IRQF_SHARED, dev_name(dev), ut);
 		if (ret) {
 			dev_err(dev, "Failed to request IRQ %d: %d\n", i, ret);
 			goto err_free_wq;
 		}
 	}
 	writel(DRIVER_OUT_ENABLE, ut->base + UT_GLB_DRIVER_OEN);
+	/* UTIMER base clock frequency */
+	ut->ced_freq = 400000000;
 	ret = devm_counter_add(dev, counter);
 	if (ret) {
 		dev_err_probe(dev, ret, "Failed to register counter device\n");
 		goto err_free_wq;
 	}
 	return 0;
-
 err_free_wq:
 	destroy_workqueue(ut->wq);
 	return ret;
@@ -793,8 +1057,8 @@ MODULE_DEVICE_TABLE(of, utimer_of_match);
 static struct platform_driver utimer_driver = {
 	.probe = utimer_probe,
 	.driver = {
-	.name = "utimer",
-	.of_match_table = utimer_of_match,
+		.name = "utimer",
+		.of_match_table = utimer_of_match,
 	},
 };
 module_platform_driver(utimer_driver);
