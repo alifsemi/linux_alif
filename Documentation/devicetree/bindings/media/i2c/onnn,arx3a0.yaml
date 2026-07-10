@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/onnn,arx3a0.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: ON Semiconductor / Apta ARX3A0 CMOS Image Sensor
+
+maintainers:
+  - Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+
+description: |-
+  The ARX3A0 is a raw CMOS image sensor with a MIPI CSI-2 interface and
+  an I2C-compatible control bus.
+
+properties:
+  compatible:
+    const: onnn,arx3a0
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    const: extclk
+
+  reset-gpios:
+    maxItems: 1
+    description: GPIO connected to the sensor reset pin, usually active low
+
+  power-gpios:
+    maxItems: 1
+    description: GPIO connected to the sensor power enable pin
+
+  vdd_io-supply:
+    description: I/O (1.8V) supply
+
+  vdd-supply:
+    description: Core, PLL and MIPI (1.2V) supply
+
+  vaa-supply:
+    description: Analog (2.7V) supply
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    unevaluatedProperties: false
+    description:
+      A single MIPI CSI-2 port with one endpoint connected to the host CSI
+      controller.
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+        properties:
+          bus-type:
+            const: 4
+          data-lanes:
+            minItems: 1
+            maxItems: 2
+          link-frequencies: true
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        arx3a0: camera@36 {
+            compatible = "onnn,arx3a0";
+            reg = <0x36>;
+            reset-gpios = <&gpio7 7 GPIO_ACTIVE_LOW>;
+            power-gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+            clocks = <&osc>;
+            clock-names = "extclk";
+            vdd_io-supply = <&vdd_io>;
+            vdd-supply = <&vdd>;
+            vaa-supply = <&vaa>;
+
+            port {
+                arx3a0_out: endpoint {
+                    bus-type = <4>;
+                    remote-endpoint = <&csi_ep>;
+                    data-lanes = <1 2>;
+                    link-frequencies = /bits/ 64 <400000000>;
+                };
+            };
+        };
+    };
