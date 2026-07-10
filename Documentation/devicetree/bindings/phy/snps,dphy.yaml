@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/phy/snps,dphy.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Synopsys DesignWare MIPI D-PHY
+
+maintainers:
+  - Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+
+properties:
+  compatible:
+    oneOf:
+      - items:
+          - enum:
+              - alif,dphy
+          - const: snps,dphy
+      - const: snps,dphy
+      - const: alif,dphy
+
+  reg:
+    items:
+      - description: SoC configuration registers region
+      - description: VBAT register region
+
+  reg-names:
+    items:
+      - const: soc_regs
+      - const: vbat
+
+  clocks:
+    minItems: 3
+    maxItems: 3
+
+  clock-names:
+    items:
+      - const: rx_clk
+      - const: tx_clk
+      - const: pll_ref_clk
+
+  alif,csi-base:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Physical base address of the CSI controller register region shared with
+      the D-PHY RX block.
+
+  alif,dsi-base:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Physical base address of the DSI controller register region shared with
+      the D-PHY TX block.
+
+  cfg-clk-frequency:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      D-PHY configuration clock frequency in Hz. If not present the driver
+      uses the rx_clk rate.
+
+  "#phy-cells":
+    const: 1
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - clocks
+  - clock-names
+  - alif,csi-base
+  - alif,dsi-base
+  - "#phy-cells"
+
+additionalProperties: false
+
+examples:
+  - |
+    dphy: dphy@1a000000 {
+        compatible = "alif,dphy";
+        reg = <0x1a000000 0x1000>,
+              <0x1a001000 0x1000>;
+        reg-names = "soc_regs", "vbat";
+        clocks = <&clk_ensemble 103>,
+                 <&clk_ensemble 104>,
+                 <&clk_ensemble 106>;
+        clock-names = "rx_clk", "tx_clk", "pll_ref_clk";
+        alif,csi-base = <0x1a002000>;
+        alif,dsi-base = <0x1a003000>;
+        cfg-clk-frequency = <24000000>;
+        #phy-cells = <1>;
+    };
