@@ -14264,6 +14264,7 @@ F:	drivers/media/platform/nxp/dwc-mipi-csi2.c
 F:	drivers/media/platform/nxp/imx-mipi-csis.c
 F:	drivers/media/platform/nxp/imx7-media-csi.c
 F:	drivers/media/platform/nxp/imx8mq-mipi-csi2.c
+F:	include/media/dwc/dw-mipi-csi-pltfrm.h
 
 MEDIA DRIVERS FOR HELENE
 M:	Abylay Ospan <aospan@amazon.com>

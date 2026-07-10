@@ -8,12 +8,15 @@
 #include <linux/errno.h>
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+
+#include <media/dwc/dw-mipi-csi-pltfrm.h>
 
 #include <media/mipi-csi2.h>
 #include <media/v4l2-ctrls.h>
@@ -314,6 +317,22 @@ struct dwc_csi_pix_format {
 	u8 width;
 };
 
+struct dwc_csi_ipi_timing {
+	u16 hsa;
+	u16 hbp;
+	u16 hsd;
+	u16 hline;
+	u16 vsa;
+	u16 vbp;
+	u16 vfp;
+	u16 vact;
+};
+
+#define CSI2RX_IPI_TIMING_SCALE_NUM	6U
+#define CSI2RX_IPI_TIMING_SCALE_DEN	5U
+#define CSI2RX_IPI_DEFAULT_HSA	3U
+#define CSI2RX_IPI_DEFAULT_HS_CLK	100000000ULL
+
 struct dwc_csi_device {
 	struct device *dev;
 	void __iomem *regs;
@@ -330,6 +349,7 @@ struct dwc_csi_device {
 	struct v4l2_mbus_config_mipi_csi2 bus;
 	u32 cfgclkfreqrange;
 	u32 hsfreqrange;
+	u32 hs_clk_rate;
 	u64 enabled_streams;
 
 	/* Use driver mutex lock for the ctrl lock */
@@ -337,6 +357,9 @@ struct dwc_csi_device {
 
 	struct dwc_csi_event events[DWC_NUM_EVENTS];
 	const struct dwc_csi_pix_format *csi_fmt;
+	u32 format_width;
+	u32 format_height;
+	struct dwc_csi_ipi_timing ipi_timing;
 
 	/* Used for pattern generator */
 	bool pg_enable;
@@ -569,7 +592,6 @@ static int dwc_csi_device_pg_enable(struct dwc_csi_device *csidev)
 
 	val = CSI2RX_PPI_PG_ENABLE_EN;
 	dwc_csi_write(csidev, CSI2RX_PPI_PG_ENABLE, val);
-
 	v4l2_subdev_unlock_state(state);
 
 	return 0;
@@ -599,6 +621,94 @@ static void dwc_csi_ipi_disable(struct dwc_csi_device *csidev)
 	dwc_csi_write(csidev, CSI2RX_IPI_MODE, 0);
 }
 
+static void dwc_csi_program_ipi_adv_features(struct dwc_csi_device *csidev)
+{
+	u32 val = CSI2RX_IPI_ADV_FEATURES_LINE_EVENT_SEL |
+		  CSI2RX_IPI_ADV_FEATURES_SYNC_VIDEO_PKT;
+
+	dwc_csi_write(csidev, CSI2RX_IPI_ADV_FEATURES, val);
+}
+
+static void dwc_csi_calc_ipi_timing(struct dwc_csi_device *csidev)
+{
+	struct dwc_csi_ipi_timing *tim = &csidev->ipi_timing;
+	const struct dwc_csi_pix_format *fmt = csidev->csi_fmt;
+	u32 width = csidev->format_width;
+	u32 height = csidev->format_height;
+	u32 bpp;
+	u32 lanes;
+	u64 hs_clk;
+	u64 pixclk;
+	u64 tmp;
+	s64 hsd;
+
+	memset(tim, 0, sizeof(*tim));
+
+	if (!fmt || !width || !height)
+		return;
+
+	bpp = fmt->width ?: 8;
+	lanes = max_t(u32, 1, csidev->bus.num_data_lanes);
+	hs_clk = csidev->hs_clk_rate ? csidev->hs_clk_rate : CSI2RX_IPI_DEFAULT_HS_CLK;
+
+	pixclk = div64_u64((hs_clk * lanes * CSI2RX_IPI_TIMING_SCALE_NUM),
+			   (u64)bpp * CSI2RX_IPI_TIMING_SCALE_DEN);
+	if (!pixclk)
+		pixclk = 1;
+
+	tim->hsa = CSI2RX_IPI_DEFAULT_HSA;
+	tim->hbp = 0;
+
+	if (hs_clk) {
+		tmp = pixclk;
+		tmp *= bpp;
+		tmp *= width;
+		tmp = div64_u64(tmp, hs_clk);
+		hsd = (s64)tmp - (s64)width - tim->hsa + 1;
+	} else {
+		hsd = width;
+	}
+
+	if (hsd < 1)
+		hsd = 1;
+	if (hsd > 0xfff)
+		hsd = 0xfff;
+	tim->hsd = (u16)hsd;
+
+	tim->hline = tim->hsa + tim->hbp + tim->hsd + width;
+	if (tim->hline > GENMASK(14, 0))
+		tim->hline = GENMASK(14, 0);
+
+	tim->vsa = 0;
+	tim->vbp = 0;
+	tim->vfp = 0;
+	tim->vact = (u16)min_t(u32, height, GENMASK(13, 0));
+}
+
+static void dwc_csi_program_ipi_timing(struct dwc_csi_device *csidev)
+{
+	const struct dwc_csi_ipi_timing *tim = &csidev->ipi_timing;
+
+	if (!tim->hline || !tim->vact)
+		return;
+
+	dwc_csi_write(csidev, CSI2RX_IPI_HSA_TIME,
+		      CSI2RX_IPI_HSA_TIME_VAL(tim->hsa));
+	dwc_csi_write(csidev, CSI2RX_IPI_HBP_TIME,
+		      CSI2RX_IPI_HBP_TIME_VAL(tim->hbp));
+	dwc_csi_write(csidev, CSI2RX_IPI_HSD_TIME,
+		      CSI2RX_IPI_HSD_TIME_VAL(tim->hsd));
+	dwc_csi_write(csidev, CSI2RX_IPI_HLINE_TIME,
+		      CSI2RX_IPI_HLINE_TIME_VAL(tim->hline));
+	dwc_csi_write(csidev, CSI2RX_IPI_VSA_LINES,
+		      CSI2RX_IPI_VSA_LINES_VAL(tim->vsa));
+	dwc_csi_write(csidev, CSI2RX_IPI_VBP_LINES,
+		      CSI2RX_IPI_VBP_LINES_VAL(tim->vbp));
+	dwc_csi_write(csidev, CSI2RX_IPI_VFP_LINES,
+		      CSI2RX_IPI_VFP_LINES_VAL(tim->vfp));
+	dwc_csi_write(csidev, CSI2RX_IPI_VACTIVE_LINES, 0);
+}
+
 static void dwc_csi_device_ipi_config(struct dwc_csi_device *csidev)
 {
 	const struct dwc_csi_pix_format *csi_fmt = csidev->csi_fmt;
@@ -616,14 +726,23 @@ static void dwc_csi_device_ipi_config(struct dwc_csi_device *csidev)
 	val  = CSI2RX_IPI_VCID_VC(0);
 	dwc_csi_write(csidev, CSI2RX_IPI_VCID, val);
 
+	dwc_csi_program_ipi_adv_features(csidev);
+	dwc_csi_calc_ipi_timing(csidev);
+	dwc_csi_program_ipi_timing(csidev);
+
 	/*
 	 * Select IPI camera timing mode and allow the pixel stream
 	 * to be non-continuous when pixel interface FIFO is empty
 	 */
 	val = dwc_csi_read(csidev, CSI2RX_IPI_MODE);
 	val &= ~CSI2RX_IPI_MODE_CONTROLLER;
-	val &= ~CSI2RX_IPI_MODE_COLOR_MODE16;
 	val |= CSI2RX_IPI_MODE_CUT_THROUGH;
+	/* RAW formats require 16-bit IPI interface to match Alif CPI IPI16 mode */
+	if (csi_fmt->data_type >= MIPI_CSI2_DT_RAW6 &&
+	    csi_fmt->data_type <= MIPI_CSI2_DT_RAW20)
+		val |= CSI2RX_IPI_MODE_COLOR_MODE16;
+	else
+		val &= ~CSI2RX_IPI_MODE_COLOR_MODE16;
 	dwc_csi_write(csidev, CSI2RX_IPI_MODE, val);
 }
 
@@ -662,6 +781,7 @@ static int dwc_csi_get_dphy_configuration(struct dwc_csi_device *csidev,
 
 	memset(cfg, 0x0, sizeof(*cfg));
 	cfg->hs_clk_rate = link_freq * 2;
+	csidev->hs_clk_rate = cfg->hs_clk_rate;
 	cfg->lanes = csidev->bus.num_data_lanes;
 
 	return 0;
@@ -709,10 +829,7 @@ static void dwc_csi_dphy_release_reset(struct dwc_csi_device *csidev)
 
 static int dwc_csi_device_init(struct dwc_csi_device *csidev)
 {
-	struct device *dev = csidev->dev;
 	union phy_configure_opts opts;
-	u32 phy_stopstate;
-	u32 val;
 	int ret;
 
 	ret = dwc_csi_get_dphy_configuration(csidev, &opts);
@@ -728,26 +845,19 @@ static int dwc_csi_device_init(struct dwc_csi_device *csidev)
 		return ret;
 
 	dwc_csi_write(csidev, CSI2RX_HOST_RESETN, 0);
-	dwc_csi_dphy_prep(csidev);
 	dwc_csi_write(csidev, CSI2RX_N_LANES, CSI2RX_N_LANES_N_LANES(opts.mipi_dphy.lanes));
-	ret = phy_power_on(csidev->phy);
-	dwc_csi_dphy_release_reset(csidev);
-	dwc_csi_write(csidev, CSI2RX_HOST_RESETN, 0x1);
 
+	ret = phy_power_on(csidev->phy);
 	if (ret)
 		return ret;
 
-	/* Check if lanes are in stop state */
-	phy_stopstate = CSI2RX_DPHY_STOPSTATE_CLK_LANE;
-	phy_stopstate |= GENMASK(csidev->bus.num_data_lanes - 1, 0);
-	ret = readl_poll_timeout(csidev->regs + CSI2RX_DPHY_STOPSTATE,
-				 val, (val & phy_stopstate) != phy_stopstate,
-				 10, 10000);
-	if (ret) {
-		dev_err(dev, "Lanes are not in stop state(%#x)\n", val);
-		return ret;
-	}
+	usleep_range(100, 200);
 
+	/* Configure IPI while HOST_RESETN=0, before releasing reset */
+	dwc_csi_device_ipi_config(csidev);
+
+	/* Release the CSI host controller from reset */
+	dwc_csi_write(csidev, CSI2RX_HOST_RESETN, 0x1);
 	return 0;
 }
 
@@ -758,7 +868,6 @@ static void dwc_csi_device_hs_rx_start(struct dwc_csi_device *csidev)
 
 static int dwc_csi_device_hs_rx_stop(struct dwc_csi_device *csidev)
 {
-	struct device *dev = csidev->dev;
 	u32 val;
 
 	phy_power_off(csidev->phy);
@@ -767,10 +876,8 @@ static int dwc_csi_device_hs_rx_stop(struct dwc_csi_device *csidev)
 
 	/* Check clock lanes are not in High Speed Mode */
 	val = dwc_csi_read(csidev, CSI2RX_DPHY_RX_STATUS);
-	if (val & CSI2RX_DPHY_RX_STATUS_CLK_LANE_HS) {
-		dev_err(dev, "Clock lanes are still in HS mode\n");
+	if (val & CSI2RX_DPHY_RX_STATUS_CLK_LANE_HS)
 		return -EINVAL;
-	}
 
 	return 0;
 }
@@ -791,74 +898,6 @@ static void dwc_csi_clear_counters(struct dwc_csi_device *csidev)
 	for (i = 0; i < DWC_NUM_EVENTS; ++i)
 		csidev->events[i].counter = 0;
 }
-
-static void dwc_csi_log_counters(struct dwc_csi_device *csidev)
-{
-	unsigned int i;
-	int counter;
-
-	for (i = 0; i < DWC_NUM_EVENTS; ++i) {
-		counter = csidev->events[i].counter;
-		if (counter > 0)
-			dev_info(csidev->dev, "%s events: %d\n",
-				 csidev->events[i].name,
-				 counter);
-	}
-}
-
-static void dwc_csi_dump_regs(struct dwc_csi_device *csidev)
-{
-#define DWC_MIPI_CSIS_DEBUG_REG(name)		{name, #name}
-	static const struct {
-		u32 offset;
-		const char * const name;
-	} registers[] = {
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_VERSION),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_N_LANES),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_HOST_RESETN),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_INT_ST_MAIN),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DATA_IDS_1_DT),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DATA_IDS_2_DT),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DATA_IDS_1_VC),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DATA_IDS_2_VC),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_SHUTDOWNZ),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_RSTZ),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_RX_STATUS),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_STOPSTATE),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_TEST_CTRL0),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_DPHY_TEST_CTRL1),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_PPI_PG_PATTERN_VRES),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_PPI_PG_PATTERN_HRES),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_PPI_PG_CONFIG),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_PPI_PG_ENABLE),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_PPI_PG_STATUS),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_MODE),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_VCID),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_DATA_TYPE),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_MEM_FLUSH),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_SOFTRSTN),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_IPI_ADV_FEATURES),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_INT_ST_DPHY_FATAL),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_INT_ST_PKT_FATAL),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_INT_ST_DPHY_FATAL),
-		DWC_MIPI_CSIS_DEBUG_REG(CSI2RX_INT_ST_IPI_FATAL),
-	};
-
-	unsigned int i;
-	u32 cfg;
-
-	dev_dbg(csidev->dev, "--- REGISTERS ---\n");
-
-	for (i = 0; i < ARRAY_SIZE(registers); i++) {
-		cfg = dwc_csi_read(csidev, registers[i].offset);
-		dev_dbg(csidev->dev, "%14s[0x%02x]: 0x%08x\n",
-			registers[i].name, registers[i].offset, cfg);
-	}
-}
-
-/*
- * V4L2 subdev operations
- */
 
 static inline struct dwc_csi_device *
 sd_to_dwc_csi_device(struct v4l2_subdev *sdev)
@@ -1001,8 +1040,11 @@ static int dwc_csi_subdev_set_fmt(struct v4l2_subdev *sd,
 	fmt->code = csi_fmt->output;
 
 	/* Store the CSIS format descriptor for active formats. */
-	if (sdformat->which == V4L2_SUBDEV_FORMAT_ACTIVE)
+	if (sdformat->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
 		csidev->csi_fmt = csi_fmt;
+		csidev->format_width = sdformat->format.width;
+		csidev->format_height = sdformat->format.height;
+	}
 
 	return 0;
 }
@@ -1024,9 +1066,6 @@ static int dwc_csi_get_frame_desc(struct v4l2_subdev *sd, unsigned int pad,
 	ret = v4l2_subdev_call(csidev->source_sd, pad, get_frame_desc,
 			       csidev->remote_pad, &source_fd);
 	if (ret < 0) {
-		dev_info(csidev->dev,
-			 "Remote sub-device on pad %d should implement .get_frame_desc! Forcing VC = 0 and DT = %x\n",
-			 pad, csidev->csi_fmt->data_type);
 		fd->type = V4L2_MBUS_FRAME_DESC_TYPE_CSI2;
 		fd->num_entries = 1;
 		fd->entry[0].pixelcode = csidev->csi_fmt->code;
@@ -1092,23 +1131,29 @@ static int dwc_csi_start_stream(struct dwc_csi_device *csidev)
 {
 	int ret;
 
-	dwc_csi_device_startup(csidev);
+	ret = clk_bulk_prepare_enable(csidev->num_clks, csidev->clks);
+	if (ret) {
+		dev_err(csidev->dev, "Failed to enable clocks: %d\n", ret);
+		return ret;
+	}
 
 	ret = dwc_csi_device_init(csidev);
 	if (ret)
-		return ret;
-
-	dwc_csi_device_ipi_config(csidev);
+		goto err_clk_disable;
 
 	ret = dwc_csi_device_pg_enable(csidev);
 	if (ret)
-		return ret;
+		goto err_clk_disable;
 
 	dwc_csi_device_hs_rx_start(csidev);
 
 	dwc_csi_device_enable_interrupts(csidev, true);
 
 	return 0;
+
+err_clk_disable:
+	clk_bulk_disable_unprepare(csidev->num_clks, csidev->clks);
+	return ret;
 }
 
 static void dwc_csi_stop_stream(struct dwc_csi_device *csidev)
@@ -1116,6 +1161,8 @@ static void dwc_csi_stop_stream(struct dwc_csi_device *csidev)
 	dwc_csi_device_enable_interrupts(csidev, false);
 	dwc_csi_device_hs_rx_stop(csidev);
 	dwc_csi_device_pg_disable(csidev);
+
+	clk_bulk_disable_unprepare(csidev->num_clks, csidev->clks);
 }
 
 static int dwc_csi_enable_streams(struct v4l2_subdev *sd,
@@ -1127,46 +1174,78 @@ static int dwc_csi_enable_streams(struct v4l2_subdev *sd,
 	int ret;
 
 	if (!csidev->source_sd) {
-		dev_err(csidev->dev, "Sensor don't link with CSIS pad\n");
-		return -EPIPE;
+		struct media_pad *sink_pad = &sd->entity.pads[DWC_CSI2RX_PAD_SINK];
+		struct media_link *link;
+
+		list_for_each_entry(link, &sd->entity.links, list) {
+			if (link->sink == sink_pad && (link->flags & MEDIA_LNK_FL_ENABLED)) {
+				csidev->source_sd =
+					media_entity_to_v4l2_subdev(link->source->entity);
+				csidev->remote_pad = link->source->index;
+				break;
+			}
+		}
 	}
 
-	if (!csidev->enabled_streams) {
-		ret = pm_runtime_resume_and_get(csidev->dev);
-		if (ret < 0)
-			return ret;
-
-		ret = v4l2_ctrl_handler_setup(&csidev->ctrl_handler);
-		if (ret < 0)
-			goto err_runtime_put;
-
-		dwc_csi_clear_counters(csidev);
-
-		ret = dwc_csi_start_stream(csidev);
-		if (ret < 0)
-			goto err_runtime_put;
-
-		dwc_csi_dump_regs(csidev);
-		dwc_csi_log_counters(csidev);
+	if (!csidev->source_sd) {
+		dev_err(csidev->dev, "sensor is not linked to the CSIS pad\n");
+		return -EPIPE;
 	}
 
 	sink_streams = v4l2_subdev_state_xlate_streams(state, DWC_CSI2RX_PAD_SOURCE,
 						       DWC_CSI2RX_PAD_SINK,
 						       &streams_mask);
 
-	dev_dbg(csidev->dev, "remote sd: %s pad: %u, sink_stream:0x%llx\n",
-		csidev->source_sd->name, csidev->remote_pad, sink_streams);
+	if (!csidev->enabled_streams) {
+		ret = pm_runtime_resume_and_get(csidev->dev);
+		if (ret < 0) {
+			dev_err(csidev->dev, "Failed to resume device: %d\n", ret);
+			return ret;
+		}
+
+		ret = v4l2_ctrl_handler_setup(&csidev->ctrl_handler);
+		if (ret < 0)
+			goto err_pm_put;
+
+		dwc_csi_clear_counters(csidev);
+
+		/*
+		 * Power on the upstream sensor subdevice before initializing D-PHY,
+		 * so it puts its lanes in the LP-11 stop state.
+		 */
+		ret = pm_runtime_resume_and_get(csidev->source_sd->dev);
+		if (ret < 0) {
+			dev_err(csidev->dev, "Failed to power on sensor: %d\n", ret);
+			goto err_pm_put;
+		}
+
+		/*
+		 * Init D-PHY first: sensor is idle (LP-11 on lanes).
+		 * D-PHY power-on checks for LP-11 stop state.
+		 */
+		ret = dwc_csi_start_stream(csidev);
+		if (ret < 0) {
+			pm_runtime_put(csidev->source_sd->dev);
+			goto err_pm_put;
+		}
+	}
 
 	ret = v4l2_subdev_enable_streams(csidev->source_sd, csidev->remote_pad,
 					 sink_streams);
-	if (ret)
+	if (ret) {
+		if (!csidev->enabled_streams) {
+			dwc_csi_stop_stream(csidev);
+			pm_runtime_put(csidev->source_sd->dev);
+			pm_runtime_put(csidev->dev);
+		}
 		return ret;
+	}
 
 	csidev->enabled_streams |= streams_mask;
 
 	return 0;
 
-err_runtime_put:
+err_pm_put:
 	pm_runtime_put(csidev->dev);
 	return ret;
 }
@@ -1179,36 +1258,28 @@ static int dwc_csi_disable_streams(struct v4l2_subdev *sd,
 	u64 sink_streams;
 	int ret;
 
+	streams_mask &= csidev->enabled_streams;
+	if (!streams_mask)
+		return 0;
+
 	sink_streams = v4l2_subdev_state_xlate_streams(state, DWC_CSI2RX_PAD_SOURCE,
 						       DWC_CSI2RX_PAD_SINK,
 						       &streams_mask);
-
-	ret = v4l2_subdev_disable_streams(csidev->source_sd, csidev->remote_pad,
-					  sink_streams);
-	if (ret)
-		return ret;
 
 	csidev->enabled_streams &= ~streams_mask;
 
 	if (!csidev->enabled_streams) {
 		dwc_csi_stop_stream(csidev);
-		dwc_csi_log_counters(csidev);
+		pm_runtime_put(csidev->source_sd->dev);
 		pm_runtime_put(csidev->dev);
 	}
 
-	return 0;
-}
-
-static int dwc_csi_subdev_log_status(struct v4l2_subdev *sd)
-{
-	struct dwc_csi_device *csidev = sd_to_dwc_csi_device(sd);
-
-	dwc_csi_log_counters(csidev);
-	return 0;
+	ret = v4l2_subdev_disable_streams(csidev->source_sd, csidev->remote_pad,
+					  sink_streams);
+	return ret;
 }
 
 static const struct v4l2_subdev_core_ops dwc_csi_subdev_core_ops = {
-	.log_status = dwc_csi_subdev_log_status,
 	.subscribe_event = v4l2_ctrl_subdev_subscribe_event,
 	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
 };
@@ -1244,9 +1315,6 @@ static int dwc_csi_link_setup(struct media_entity *entity,
 	struct dwc_csi_device *csidev = sd_to_dwc_csi_device(sd);
 	struct v4l2_subdev *remote_sd;
 
-	dev_dbg(csidev->dev, "link setup %s -> %s", remote_pad->entity->name,
-		local_pad->entity->name);
-
 	/* We only care about the link to the source. */
 	if (!(local_pad->flags & MEDIA_PAD_FL_SINK))
 		return 0;
@@ -1274,9 +1342,6 @@ static int dwc_csi_link_validate(struct media_link *link)
 
 	sink_sd = media_entity_to_v4l2_subdev(sink_pad->entity);
 	csidev = sd_to_dwc_csi_device(sink_sd);
-
-	dev_dbg(csidev->dev, "entity name:%s pad index=%d\n",
-		sink_sd->name, sink_pad->index);
 
 	/*
 	 * Skip link validate when pattern enabled since the source
@@ -1311,7 +1376,7 @@ static int dwc_csi_notify_bound(struct v4l2_async_notifier *notifier,
 	struct dwc_csi_device *csidev = notifier_to_dwc_csi_device(notifier);
 	struct media_pad *sink = &csidev->sd.entity.pads[DWC_CSI2RX_PAD_SINK];
 
-	return v4l2_create_fwnode_links_to_pad(sd, sink, 0);
+	return v4l2_create_fwnode_links_to_pad(sd, sink, MEDIA_LNK_FL_ENABLED);
 }
 
 static const struct v4l2_async_notifier_operations dwc_csi_notify_ops = {
@@ -1349,9 +1414,6 @@ static int dwc_csi_async_register(struct dwc_csi_device *csidev)
 	}
 
 	csidev->bus = vep.bus.mipi_csi2;
-
-	dev_dbg(csidev->dev, "data lanes: %d\n", csidev->bus.num_data_lanes);
-	dev_dbg(csidev->dev, "flags: 0x%08x\n", csidev->bus.flags);
 
 	asd = v4l2_async_nf_add_fwnode_remote(&csidev->notifier, ep,
 					      struct v4l2_async_connection);
@@ -1393,6 +1455,10 @@ static const char * const test_pattern_menu[] = {
 	"Horizontal Color Bars",
 };
 
+static int dwc_csi_default_test_pattern;
+module_param_named(default_test_pattern, dwc_csi_default_test_pattern, int, 0644);
+MODULE_PARM_DESC(default_test_pattern, "Default pattern (0=off,1=vert,2=horiz)");
+
 static inline struct dwc_csi_device *ctrl_to_csidev(struct v4l2_ctrl *ctrl)
 {
 	return container_of(ctrl->handler, struct dwc_csi_device, ctrl_handler);
@@ -1424,6 +1490,7 @@ static const struct v4l2_ctrl_ops dwc_csi_ctrl_ops = {
 static int dwc_csi_controls_init(struct dwc_csi_device *csidev)
 {
 	struct v4l2_ctrl_handler *handler = &csidev->ctrl_handler;
+	struct v4l2_ctrl *pattern_ctrl;
 	int ret;
 
 	v4l2_ctrl_handler_init(handler, 1);
@@ -1431,15 +1498,21 @@ static int dwc_csi_controls_init(struct dwc_csi_device *csidev)
 	/* Use driver mutex lock for the ctrl lock */
 	handler->lock = &csidev->lock;
 
-	v4l2_ctrl_new_std_menu_items(handler, &dwc_csi_ctrl_ops,
-				     V4L2_CID_TEST_PATTERN,
-				     ARRAY_SIZE(test_pattern_menu) - 1,
-				     0, 0, test_pattern_menu);
+	pattern_ctrl = v4l2_ctrl_new_std_menu_items(handler,
+						    &dwc_csi_ctrl_ops,
+						    V4L2_CID_TEST_PATTERN,
+						    ARRAY_SIZE(test_pattern_menu) - 1,
+						    0, 0, test_pattern_menu);
 
 	if (handler->error) {
 		ret = handler->error;
 		v4l2_ctrl_handler_free(handler);
 		return ret;
+	}
+
+	if (pattern_ctrl && dwc_csi_default_test_pattern > 0 &&
+	    dwc_csi_default_test_pattern < ARRAY_SIZE(test_pattern_menu)) {
+		v4l2_ctrl_s_ctrl(pattern_ctrl, dwc_csi_default_test_pattern);
 	}
 
 	csidev->sd.ctrl_handler = handler;
@@ -1603,7 +1676,6 @@ static int dwc_csi_device_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "Failed to request IRQ\n");
 
 	csidev->num_clks = devm_clk_bulk_get_all(dev, &csidev->clks);
-
 	dwc_csi_param_init(csidev);
 
 	ret = dwc_csi_subdev_init(csidev);
@@ -1629,7 +1701,6 @@ static int dwc_csi_device_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, ret, "Async register failed\n");
 
 	pm_runtime_enable(dev);
-
 	return 0;
 }
 
@@ -1664,7 +1735,7 @@ static struct platform_driver dwc_csi_device_driver = {
 		.pm             = &dwc_csi_device_pm_ops,
 	},
 	.probe  = dwc_csi_device_probe,
-	.remove = dwc_csi_device_remove,
+	.remove_new = dwc_csi_device_remove,
 };
 
 module_platform_driver(dwc_csi_device_driver);
