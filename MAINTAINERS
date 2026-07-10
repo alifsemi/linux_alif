@@ -805,6 +805,12 @@ F:	Documentation/devicetree/bindings/media/i2c/alliedvision,alvium-csi2.yaml
 F:	drivers/media/i2c/alvium-csi2.c
 F:	drivers/media/i2c/alvium-csi2.h
 
+ALIF ENSEMBLE CAMERA PARALLEL INTERFACE (CPI) DRIVER
+M:	Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/alif,ensemble-cpi.yaml
+
 ALLWINNER A10 CSI DRIVER
 M:	Maxime Ripard <mripard@kernel.org>
 L:	linux-media@vger.kernel.org
