@@ -144,6 +144,14 @@
 			reg = <0xa3000000 0x60000>; /* 384KB SRAM within HyperRAM */
 			no-map;
 		};
+
+		/* CPI frame buffer pool in on-chip SRAM (4 x 560x560 RAW10 frames) */
+		cpi_buf: cpi-frame-buffer@2000000 {
+			compatible = "shared-dma-pool";
+			reg = <0x02000000 0x300000>; /* 3MB from SRAM */
+			no-map;
+		};
+
 	};
 
 	refclk: timer@1a220000 {
@@ -1570,6 +1578,14 @@
 			#clock-cells = <1>;
 			clocks = <&hfxo>, <&pll_clk1>, <&pll_clk3>;
 			clock-names = "hfxo", "pll_clk1", "pll_clk3";
+
+			extclk: camera-extclk {
+				compatible = "divider-clock";
+				#clock-cells = <0>;
+				clocks = <&psclks ENSEMBLE_SYST_ACLK>;
+				clock-div = <20>;
+				clock-output-names = "extclk";
+			};
 		};
 
 	};
@@ -1591,6 +1607,46 @@
 			clock-names = "core" ;
 			i2c-scl-hz = <100000>;
 /*			i3c-scl-hz = <2000000>;*/
+			status = "disabled";
+		};
+
+		dphy: dphy@4903f000 {
+			#phy-cells = <1>;
+			compatible = "alif,dphy", "snps,dphy";
+			reg = <0x4903f000 0xb0>, <0x1a609008 0x4>;
+			reg-names = "soc_regs", "vbat";
+			alif,csi-base = <0x49033000>;
+			alif,dsi-base = <0x49032000>;
+			clocks = <&psclks ENSEMBLE_MIPI_RXDPHY_CLK>,
+				 <&psclks ENSEMBLE_MIPI_TXDPHY_CLK>,
+				 <&psclks ENSEMBLE_MIPI_PLLREF_CLK>;
+			clock-names = "rx_clk", "tx_clk", "pll_ref_clk";
+			cfg-clk-frequency = <25000000>;
+			status = "disabled";
+		};
+
+		cpi: camera-controller@49030000 {
+			compatible = "alif,ensemble-cpi2";
+			reg = <0x49030000 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&psclks ENSEMBLE_CPI_APB>, <&psclks ENSEMBLE_CSI_PIXCLK>;
+			clock-names = "apb_clk", "pix_clk";
+			memory-region = <&cpi_buf>;
+			status = "disabled";
+		};
+
+		csi: csi-controller@49033000 {
+			compatible = "alif,ensemble-mipi-csi2", "snps,dw-mipi-csi2-v150";
+			reg = <0x49033000 0x1000>;
+			reg-names = "core";
+			phys = <&dphy 1>;
+			phy-names = "rx";
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 333 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&psclks ENSEMBLE_CSI_APB>,
+				 <&psclks ENSEMBLE_CSI_PIXCLK>;
+			clock-names = "per", "pixel";
 			status = "disabled";
 		};
 		/* ALIF Event Router */
