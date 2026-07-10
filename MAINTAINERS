@@ -810,6 +810,7 @@ M:	Yogender Kumar Arya <yogender.kumar@alifsemi.com>
 L:	linux-media@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/media/alif,ensemble-cpi.yaml
+F:	drivers/media/platform/alif/
 
 ALLWINNER A10 CSI DRIVER
 M:	Maxime Ripard <mripard@kernel.org>
