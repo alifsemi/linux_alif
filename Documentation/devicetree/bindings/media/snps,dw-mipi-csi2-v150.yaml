@@ -22,6 +22,7 @@ properties:
     items:
       - enum:
           - fsl,imx93-mipi-csi2
+          - alif,ensemble-mipi-csi2
       - const: snps,dw-mipi-csi2-v150
 
   reg:
