@@ -159,15 +159,41 @@ static inline struct clk_hw *ensemble_clk_hw_fixed_factor(const char *name,
 }
 
 static inline struct clk_hw *ensemble_clk_hw_divider(const char *name,
-						const char *parent, void __iomem *reg,
-						u8 shift, u8 width)
+			const char *parent_name,
+			void __iomem *reg,
+			u8 shift,
+			u8 width)
 {
-	return clk_hw_register_divider(NULL, name, parent, 0, reg, shift,
-			width, CLK_DIVIDER_ONE_BASED, &ensemble_ccps_lock);
+	return clk_hw_register_divider(NULL, name, parent_name,
+			CLK_SET_RATE_PARENT, reg,
+			shift, width, CLK_DIVIDER_ONE_BASED, &ensemble_ccps_lock);
+}
+
+/**
+ * find_child_clock_by_name - Find a child clock node by its output name
+ * @parent: Parent device node to search under
+ * @clk: Clock output name to match against "clock-output-names" property
+ *
+ * Returns the matching child device_node or NULL if not found.
+ */
+static struct device_node *find_child_clock_by_name(struct device_node *parent, const char *clk)
+{
+	struct device_node *child;
+	const char *name;
+
+	for_each_child_of_node(parent, child) {
+		if (!of_property_read_string(child, "clock-output-names", &name)) {
+			if (!strcmp(name, clk))
+				return child;
+		}
+	}
+
+	return NULL;
 }
 
 #define CC_DIV_SHIFT		16
 #define CC_DIV_WIDTH		9
+#define CC_DIV_MASK		(((1U << CC_DIV_WIDTH) - 1) << CC_DIV_SHIFT)
 
 #define CC_MUX_SHIFT		4
 #define CC_MUX_MASK		0x1
@@ -258,6 +284,9 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	struct device_node *np = ccps_node;
 	void __iomem *base, *cgu_base, *ccpmst_base, *vbat_base;
 	struct clk *clk;
+	struct device_node *iter;
+	u32 clk_div;
+	u32 val;
 	int ret;
 
 	base = ioremap(CCPSLV_BASE, SZ_4K);
@@ -369,12 +398,28 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	hws[ENSEMBLE_DWC_USB_CLK] = ensemble_clk_hw_gate("dwc_clk",
 				"syst_pclk", ccpmst_base + 0xC, 20);
 
-	hws[ENSEMBLE_CAMERA_PIXCLK] = ensemble_clk_hw_composite("camera_pixclk",
-				pixclk_sels, ccpmst_base + 0x0);
+	/*
+	 * camera_pixclk shares ccpmst_base + 0x0 bit 0 with the sensor's
+	 * extclk gate. If the unused-clock cleanup disables camera_pixclk,
+	 * it also clears that shared bit and turns off extclk, breaking
+	 * ARX3A0 I2C. Keep this clock enabled until the gate sharing is
+	 * modelled explicitly.
+	 */
+	hws[ENSEMBLE_CAMERA_PIXCLK] = _ensemble_clk_hw_composite("camera_pixclk",
+								 pixclk_sels, ccpmst_base + 0x0,
+								 0, CLK_IGNORE_UNUSED);
 	hws[ENSEMBLE_CDC200_PIXCLK] = ensemble_clk_hw_composite("cdc200_pixclk",
 				pixclk_sels, ccpmst_base + 0x4);
 	hws[ENSEMBLE_CSI_PIXCLK] = ensemble_clk_hw_composite("csi_pixclk",
-				pixclk_sels, ccpmst_base + 0x4);
+				pixclk_sels, ccpmst_base + 0x8);
+	hws[ENSEMBLE_CSI_APB] =
+		ensemble_clk_hw_gate("csi_apb", "syst_pclk",
+				     ccpmst_base + 0xC,
+				     24);
+	hws[ENSEMBLE_CPI_APB] =
+		ensemble_clk_hw_gate("cpi_apb", "syst_pclk",
+				     ccpmst_base + 0xC,
+				     0);
 
 	hws[ENSEMBLE_CDC200_DPI_PIXCLK] =  ensemble_clk_hw_fixed_factor("cdc200_dpi_pixclk",
 				"cdc200_pixclk", 1, 1);
@@ -539,6 +584,29 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 					"76m8_clk", base + 0x1c, 0, 10);
 	hws[ENSEMBLE_DMA_ENA_CLK] = ensemble_clk_hw_gate("dma_clk",
 				"syst_aclk", ccpmst_base + 0xC, 4);
+
+	iter = find_child_clock_by_name(ccps_node, "extclk");
+	if (iter) {
+		of_property_read_u32(iter, "clock-div", &clk_div);
+		of_node_put(iter);
+
+		clk_div &= ((1UL << CC_DIV_WIDTH) - 1);
+		val = readl(ccpmst_base);
+		val &= ~CC_DIV_MASK;
+		val |= clk_div << CC_DIV_SHIFT;
+		writel(val, ccpmst_base);
+
+		hws[ENSEMBLE_EXT_CLK_DIV] =
+			ensemble_clk_hw_divider("extclk_rate",
+						"syst_aclk",
+						ccpmst_base,
+						16, 9);
+
+		hws[ENSEMBLE_EXT_CLK] =
+			ensemble_clk_hw_gate("extclk", "extclk_rate",
+					     ccpmst_base + 0x0,
+					     0);
+	}
 
 	/*
 	 * Register CPU clock with custom ops for dynamic rate reading.
