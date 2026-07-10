@@ -60,6 +60,15 @@ config VIDEO_AR0521
 	  To compile this driver as a module, choose M here: the
 	  module will be called ar0521.
 
+config VIDEO_ARX3A0
+	tristate "ON Semiconductor ARX3A0 sensor support"
+	help
+	  This is a Video4Linux2 sensor driver for the ON Semiconductor
+	  ARX3A0 camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called arx3a0.
+
 config VIDEO_GC0308
 	tristate "GalaxyCore GC0308 sensor support"
 	select V4L2_CCI_I2C

@@ -24294,6 +24294,7 @@ F:	Documentation/devicetree/bindings/media/i2c/onnn,arx3a0.yaml
 F:	Documentation/driver-api/media/camera-sensor.rst
 F:	Documentation/driver-api/media/tx-rx.rst
 F:	drivers/media/i2c/ar*
+F:	drivers/media/i2c/arx3a0*
 F:	drivers/media/i2c/gc*
 F:	drivers/media/i2c/hi*
 F:	drivers/media/i2c/imx*
