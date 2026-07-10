@@ -2066,6 +2066,7 @@ F:	drivers/iio/dac/ensemble-dac.c
 F:	drivers/iio/imu/bmi323/bmi323_i3c.c
 F:	drivers/misc/alif-comparator.c
 F:	drivers/misc/cmp.h
+F:	drivers/phy/synopsys/
 F:	drivers/regulator/ensemble-regulator.c
 F:	drivers/rpmsg/rpmsg_arm_mailbox.c
 F:	drivers/rtc/rtc-dw-apb.c

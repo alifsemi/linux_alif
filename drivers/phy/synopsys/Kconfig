@@ -1,0 +1,12 @@
+config PHY_SYNOPSYS_DPHY_RX
+	tristate "Synopsys D-PHY Rx Support"
+	depends on HAS_IOMEM && OF
+	select GENERIC_PHY
+	select GENERIC_PHY_MIPI_DPHY
+	help
+	  Enable support for the Synopsys DesignWare MIPI D-PHY in
+	  receive (RX) configuration. This PHY is used with MIPI CSI-2
+	  camera interfaces on SoCs such as Alif Ensemble.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snps-dphy-rx.
