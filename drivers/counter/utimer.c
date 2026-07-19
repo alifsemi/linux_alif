@@ -1095,7 +1095,7 @@ static int utimer_probe(struct platform_device *pdev)
 					ut->ced_freq, NSEC_PER_SEC);
 	ret = devm_counter_add(dev, counter);
 	if (ret) {
-		dev_err_probe(dev, ret, "Failed to register counter device\n");
+		dev_err_probe(dev, ret, "Failed why to register counter device\n");
 		goto err_free_wq;
 	}
 	return 0;
