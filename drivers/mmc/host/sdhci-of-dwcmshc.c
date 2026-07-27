@@ -1096,6 +1096,15 @@ static inline void sg2042_sdhci_phy_init(struct sdhci_host *host)
 	sdhci_writel(host, val, PHY_CNFG_R);
 }
 
+static void ensemble_sdhci_reset(struct sdhci_host *host, u8 mask)
+{
+	sdhci_reset(host, mask);
+
+	/* Clear any spurious command complete interrupt after CMD reset */
+	if (mask & SDHCI_RESET_CMD)
+		sdhci_writel(host, SDHCI_INT_RESPONSE, SDHCI_INT_STATUS);
+}
+
 static void sg2042_sdhci_reset(struct sdhci_host *host, u8 mask)
 {
 	sdhci_reset(host, mask);
@@ -1185,6 +1194,24 @@ static const struct sdhci_ops sdhci_dwcmshc_sg2042_ops = {
 	.reset			= sg2042_sdhci_reset,
 	.adma_write_desc	= dwcmshc_adma_write_desc,
 	.platform_execute_tuning = th1520_execute_tuning,
+};
+
+static const struct sdhci_ops sdhci_dwcmshc_ensemble_ops = {
+	.set_clock		= sdhci_set_clock,
+	.set_bus_width		= sdhci_set_bus_width,
+	.set_uhs_signaling	= dwcmshc_set_uhs_signaling,
+	.get_max_clock		= dwcmshc_get_max_clock,
+	.reset			= ensemble_sdhci_reset,
+	.adma_write_desc	= dwcmshc_adma_write_desc,
+	.irq			= dwcmshc_cqe_irq_handler,
+};
+
+static const struct dwcmshc_pltfm_data sdhci_dwcmshc_ensemble_pdata = {
+	.pdata = {
+		.ops = &sdhci_dwcmshc_ensemble_ops,
+		.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN,
+		.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN,
+	},
 };
 
 static const struct dwcmshc_pltfm_data sdhci_dwcmshc_pdata = {
@@ -1319,6 +1346,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
 	{
 		.compatible = "rockchip,rk3568-dwcmshc",
 		.data = &sdhci_dwcmshc_rk35xx_pdata,
+	},
+	{
+		.compatible = "alif,ensemble-dwcmshc",
+		.data = &sdhci_dwcmshc_ensemble_pdata,
 	},
 	{
 		.compatible = "snps,dwcmshc-sdhci",

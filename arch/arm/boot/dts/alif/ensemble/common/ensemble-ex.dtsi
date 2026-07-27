@@ -537,7 +537,7 @@
 		};
 
 		sdmmc: mmc@48102000 {
-			compatible = "snps,dwcmshc-sdhci";
+			compatible = "alif,ensemble-dwcmshc", "snps,dwcmshc-sdhci";
 			reg = <0x48102000 0x1000>;
 			interrupts = <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 28 IRQ_TYPE_LEVEL_HIGH>;
