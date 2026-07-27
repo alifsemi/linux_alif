@@ -24,6 +24,7 @@ properties:
           - sophgo,sg2002-dwcmshc
           - sophgo,sg2042-dwcmshc
           - thead,th1520-dwcmshc
+          - alif,ensemble-dwcmshc
 
   reg:
     maxItems: 1
