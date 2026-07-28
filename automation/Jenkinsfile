@@ -1,5 +1,3 @@
-def BRANCH = "v6.12-dev"
-
 pipeline {
     agent any
     stages {
@@ -9,16 +7,9 @@ pipeline {
                   sh '''#!/bin/bash -xe
                      printenv
                      echo "====> ${CHANGE_BRANCH} ${BRANCH_NAME}"
-                     if [ "${BRANCH_NAME}" = "v6.12-dev" ] ; then
-                        BRANCH="v6.12-dev"
-                     elif [ "${CHANGE_BRANCH}" != "" ] ; then
-                        BRANCH="${CHANGE_BRANCH}"
-                     else
-                        BRANCH="v6.12-dev"
-                     fi
-                     if [ \"x${BRANCH}\" != \"xv6.12-dev\" ] ; then
+                     if [ \"x${BRANCH_NAME}\" != \"x${CHANGE_BRANCH}\" ] ; then
                         for iter in `git log --format="%H" \
-                        origin/"${BRANCH}"...origin/v6.12-dev` ; do
+                        origin/"${BRANCH_NAME}"...origin/"{CHANGE_BRANCH}"` ; do
                            if ! git show $iter | grep "^+" | codespell - ; then
                               echo "Codespell failed on commit $iter"
                               exit 1
@@ -40,7 +31,7 @@ pipeline {
                         done
                      fi
                      source /opt/alif/apss-tiny/yocto_5.0/0.1/environment-setup-cortexa32hf-neon-poky-linux-musleabi
-                     git checkout ${BRANCH}
+                     git checkout ${BRANCH_NAME}
 
                      make distclean
                      make -j64 devkit_e8_defconfig
@@ -53,3 +44,4 @@ pipeline {
         }
     }
 }
+
