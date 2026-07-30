@@ -6,10 +6,10 @@ pipeline {
                script {
                   sh '''#!/bin/bash -xe
                      printenv
-                     echo "====> ${CHANGE_BRANCH} ${BRANCH_NAME}"
-                     if [ \"x${BRANCH_NAME}\" != \"x${CHANGE_BRANCH}\" ] ; then
+                     echo "====> ${CHANGE_TARGET} ${BRANCH_NAME}"
+                     if [ \"x${BRANCH_NAME}\" != \"x${CHANGE_TARGET}\" ] ; then
                         for iter in `git log --format="%H" \
-                        origin/"${BRANCH_NAME}"...origin/"{CHANGE_BRANCH}"` ; do
+                        origin/"${BRANCH_NAME}"...origin/"${CHANGE_TARGET}"` ; do
                            if ! git show $iter | grep "^+" | codespell - ; then
                               echo "Codespell failed on commit $iter"
                               exit 1
