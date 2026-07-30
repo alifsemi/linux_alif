@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/misc/alif,cmp-module.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: ALIF High-Speed Comparator (CMP) Device Tree Bindings
+title: ALIF High-Speed Comparator (CMP)
 
 maintainers:
   - Pankaj Pandey <pankaj.pandey@alifsemi.com>
@@ -22,28 +22,25 @@ allOf:
             const: alif,cmp-module
     then:
       required:
-	- compatible
-	- reg
-	- reg-names
-	- interrupts
-	- interrupt-parent
-	- clocks
-	- cmp-gpios
-	- led-gpios (only for cmp0)
-	- instance
-	- status
+        - compatible
+        - reg
+        - reg-names
+        - interrupts
+        - interrupt-parent
+        - clocks
+        - cmp-gpios
+        - led-gpios
+        - instance
+        - status
 
 properties:
   compatible:
     const: alif,cmp-module
 
   reg:
-    minItems: 2
-    maxItems: 2
-    type: reg
+    maxItems: 1
     description: |
-      The first region is the module's register space.
-      The second region is the base address space.
+      The module's register space.
 
   reg-names:
     items:
@@ -51,44 +48,41 @@ properties:
 
   interrupts:
     maxItems: 1
-    type: interrupts
     description: Interrupt for the comparison module
-
-  interrupt-parent:
-    type: interrupt-controller
-    description: phandle to the interrupt controller
 
   clocks:
     maxItems: 1
-    type: phandle
     description: Clock for the comparison module
 
   cmp-gpios:
     maxItems: 1
-    type: phandle-array
     description: GPIO used for comparison output
 
   led-gpios:
     maxItems: 1
-    type: phandle-array
     description: GPIO for status LED indication required for CMP0, rest will share.
 
   instance:
+    $ref: /schemas/types.yaml#/definitions/uint32
     minimum: 0
     maximum: 3
-    type: int
     description: CMP instance ID (0 = CMP0, 1 = CMP1, etc.)
 
   status:
     description: Initial module status
     $ref: /schemas/types.yaml#/definitions/string
-    enum: [ "disabled", "okay" ]
-    default: "disabled"
+    enum: [disabled, okay]
+    default: disabled
 
 additionalProperties: false
 
 examples:
   - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/clock/alif,ensemble-clock.h>
+    #include <dt-bindings/gpio/gpio.h>
+
     cmp0: cmp0@49023000 {
         compatible = "alif,cmp-module";
         reg = <0x49023000 0x1000>;
@@ -98,7 +92,7 @@ examples:
         clocks = <&psclks ENSEMBLE_CMP0_CLK>;
         cmp-gpios = <&port15 7 GPIO_ACTIVE_HIGH>;
         led-gpios = <&port13 3 GPIO_ACTIVE_HIGH>;
-	instance = <0>;
+        instance = <0>;
         status = "disabled";
     };
 
@@ -109,8 +103,7 @@ examples:
         interrupt-parent = <&gic>;
         interrupts = <GIC_SPI 157 IRQ_TYPE_LEVEL_HIGH>;
         clocks = <&psclks ENSEMBLE_CMP0_CLK>;
-        cmp-gpios = <&port15 6 GPIO_ACTIVE_HIGH>;
-	instance = <1>;
+        instance = <1>;
         status = "disabled";
     };
 ...

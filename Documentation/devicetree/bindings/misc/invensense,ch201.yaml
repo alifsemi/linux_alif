@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: https://devicetree.org/schemas/misc/invensense,ch201.yaml#
+$id: http://devicetree.org/schemas/misc/invensense,ch201.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: Invensense CH201 Ultrasonic Time-of-Flight Sensor
 
 maintainers:
-  - name: Aravind Krishnan
-    email: aravind.krishnan@alifsemi.com
+  - Aravind Krishnan <aravind.krishnan@alifsemi.com>
 
 description: |
   The Invensense CH201 is an ultrasonic time-of-flight sensor that measures
@@ -45,21 +44,17 @@ properties:
       Interrupt line from the sensor, typically connected to the INT1 pin.
     maxItems: 1
 
-  interrupt-parent:
-    description: |
-      Phandle to the interrupt controller (GPIO controller).
-
-
 required:
   - compatible
   - reg
   - interrupts
-  - interrupt-parent
 
 additionalProperties: false
 
 examples:
   - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+
     i2c {
       #address-cells = <1>;
       #size-cells = <0>;

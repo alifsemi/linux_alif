@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: "http://devicetree.org/schemas/usb/alif,ensemble-usb3.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+$id: http://devicetree.org/schemas/usb/alif,ensemble-usb3.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: Alif Ensemble DWC3 USB Controller
 
@@ -24,8 +24,8 @@ properties:
 
   status:
     enum:
-      - "okay"
-      - "disabled"
+      - okay
+      - disabled
 
   clock-names:
     items:
@@ -38,14 +38,16 @@ properties:
       - description: Handle to ENSEMBLE_DWC_USB_CLK
 
 patternProperties:
-  "^usbdual_hs@.*$":
+  "^usb@.*$":
     type: object
     description: |
       USB Dual Role Device node for the DWC3 controller.
     additionalProperties: false
     properties:
       compatible:
-        const: snps,dwc3
+        items:
+          - const: snps
+          - const: snps,dwc3
 
       reg:
         items:
@@ -56,6 +58,9 @@ patternProperties:
         description: Interrupt specifier for the DWC3 controller.
 
       phy:
+        description: Handle to the PHY used by the DWC3 controller.
+
+      phys:
         description: Handle to the PHY used by the DWC3 controller.
 
       phy-names:
@@ -116,6 +121,10 @@ additionalProperties: false
 
 examples:
   - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    #include <dt-bindings/clock/alif,ensemble-clock.h>
+
     hsusb: dwc3-drd {
         compatible = "alif,ensemble-usb3";
         #address-cells = <1>;
@@ -125,8 +134,8 @@ examples:
         clock-names = "usb_clk", "dwc_clk";
         clocks = <&psclks ENSEMBLE_USB_CLK>, <&psclks ENSEMBLE_DWC_USB_CLK>;
 
-        usbdual_hs: usb-dual@48200000 {
-            compatible = "snps,dwc3";
+        dwc3: usb@48200000 {
+            compatible = "snps", "snps,dwc3";
             reg = <0x48200000 0x100000>;
             interrupts = <GIC_SPI 26 IRQ_TYPE_LEVEL_HIGH>;
             phy = <&psclks ENSEMBLE_USB_CLK>;

@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
 %YAML 1.2
 ---
-$id: "http://devicetree.org/schemas/misc/alif,adc-dac6.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+$id: http://devicetree.org/schemas/misc/alif,adc-dac6.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Ensemble ADC_VREF and DAC6 registers init Device Tree Binding
+title: Ensemble ADC_VREF and DAC6 registers init
 
 maintainers:
-  - name: Pankaj Pandey
-    email: pankaj.pandey@alifsemi.com
+  - Pankaj Pandey <pankaj.pandey@alifsemi.com>
 
 description: |
   This binding describes a custom node used to initialized the

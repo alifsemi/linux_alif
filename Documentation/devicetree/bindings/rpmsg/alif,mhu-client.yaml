@@ -1,31 +1,40 @@
 # SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
-$id: "http://devicetree.org/schemas/hwlock/alif,rpmsg.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+---
+$id: http://devicetree.org/schemas/rpmsg/alif,mhu-client.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: ARM MHUv2 RPMSG mailbox Client
 description: ARM MHUv2 RPMSG mailbox Client
 
 maintainers:
-  - Hemanth.Kumar<hemanth@alifsemi.com>
+  - Hemanth Kumar <hemanth@alifsemi.com>
 
 properties:
   compatible:
     enum:
-      - alif,client
+      - arm,client
 
-  mbox:
+  mboxes:
     description: |
       List of phandles to mailbox channels used for receiving and
       transmitting data from and to the hardware UART.
-    items:
-      - description: mailbox for receiving data from hardware UART
-      - description: mailbox for transmitting data to hardware UART
+    minItems: 12
+    maxItems: 12
 
-   mbox-names:
+  mbox-names:
     items:
-      - const: txdb
-      - const: rxdb
-
+      - const: txdb0
+      - const: txdb1
+      - const: rxdb0
+      - const: rxdb1
+      - const: txdb2
+      - const: txdb3
+      - const: rxdb2
+      - const: rxdb3
+      - const: txdb4
+      - const: txdb5
+      - const: rxdb4
+      - const: rxdb5
 
 required:
   - compatible
@@ -37,23 +46,23 @@ additionalProperties: false
 examples:
   - |
     client {
-	compatible = "arm,client";
-        mbox-names = 	"txdb0", "txdb1",
-			"rxdb0", "rxdb1",
-			"txdb2", "txdb3",
-			"rxdb2", "rxdb2",
-			"txdb4", "txdb5",
-			"rxdb4", "rxdb5";
-	mboxes 	   =	<&mbox_m55_hp_mhu0_tx 0 0>,
-			<&mbox_m55_hp_mhu1_tx 0 0>,
-			<&mbox_m55_hp_mhu0_rx 0 0>,
-			<&mbox_m55_hp_mhu1_rx 0 0>,
-			<&mbox_m55_he_mhu0_tx 0 0>,
-			<&mbox_m55_he_mhu1_tx 0 0>,
-			<&mbox_m55_he_mhu0_rx 0 0>,
-			<&mbox_m55_he_mhu1_rx 0 0>,
-			<&mbox_se_mhu0_tx 0 0>,
-			<&mbox_se_mhu1_tx 0 0>,
-			<&mbox_se_mhu0_rx 0 0>,
-			<&mbox_se_mhu1_rx 0 0>;
+        compatible = "arm,client";
+        mbox-names = "txdb0", "txdb1",
+                     "rxdb0", "rxdb1",
+                     "txdb2", "txdb3",
+                     "rxdb2", "rxdb3",
+                     "txdb4", "txdb5",
+                     "rxdb4", "rxdb5";
+        mboxes = <&mbox_m55_hp_mhu0_tx 0 0>,
+                 <&mbox_m55_hp_mhu1_tx 0 0>,
+                 <&mbox_m55_hp_mhu0_rx 0 0>,
+                 <&mbox_m55_hp_mhu1_rx 0 0>,
+                 <&mbox_m55_he_mhu0_tx 0 0>,
+                 <&mbox_m55_he_mhu1_tx 0 0>,
+                 <&mbox_m55_he_mhu0_rx 0 0>,
+                 <&mbox_m55_he_mhu1_rx 0 0>,
+                 <&mbox_se_mhu0_tx 0 0>,
+                 <&mbox_se_mhu1_tx 0 0>,
+                 <&mbox_se_mhu0_rx 0 0>,
+                 <&mbox_se_mhu1_rx 0 0>;
     };
