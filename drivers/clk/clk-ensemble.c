@@ -27,8 +27,8 @@
 #define HOSTCPUCLK_CTRL				0x800
 #define HOSTCPUCLK_DIV1				0x808
 #define RTC_CLK_DIVIDER				14648
-#define PCLK_FORCE				(1 << 30)
-#define IPCLK_FORCE				(1 << 31)
+#define PCLK_FORCE				BIT(30)
+#define IPCLK_FORCE				BIT(31)
 #define HFXO_76M8_CLK				76800000
 #define EXT_AUDIO_CLK				76800000
 #define HOSTCPUCLK_DIV_MASK			0x1F
@@ -38,7 +38,7 @@ static struct clk_hw_onecell_data *clk_hw_data;
 static void __iomem *clkctl_sys_base;
 static unsigned long pll_clk1_rate;
 
-/*
+/**
  * Custom CPU clock structure for dynamic rate reading.
  * The standard clk_divider caches the rate, but we need clk_summary
  * to show the actual current frequency by reading the register.
@@ -51,20 +51,19 @@ struct ensemble_cpu_clk {
 
 #define to_ensemble_cpu_clk(_hw) container_of(_hw, struct ensemble_cpu_clk, hw)
 
-static unsigned long ensemble_cpu_clk_recalc_rate(struct clk_hw *hw,
-						  unsigned long parent_rate)
+static unsigned long ensemble_cpu_clk_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
 {
 	struct ensemble_cpu_clk *cpu = to_ensemble_cpu_clk(hw);
 	u32 reg, div;
 
 	reg = readl(cpu->reg);
-	div = (reg & HOSTCPUCLK_DIV_MASK) + 1;  /* Zero-based: reg_val + 1 = divider */
+	/* Zero-based: reg_val + 1 = divider */
+	div = (reg & HOSTCPUCLK_DIV_MASK) + 1;
 
 	return parent_rate / div;
 }
 
-static long ensemble_cpu_clk_round_rate(struct clk_hw *hw,
-					unsigned long rate,
+static long ensemble_cpu_clk_round_rate(struct clk_hw *hw, unsigned long rate,
 					unsigned long *parent_rate)
 {
 	unsigned long div;
@@ -80,8 +79,7 @@ static long ensemble_cpu_clk_round_rate(struct clk_hw *hw,
 	return *parent_rate / div;
 }
 
-static int ensemble_cpu_clk_hw_set_rate(struct clk_hw *hw,
-					unsigned long rate,
+static int ensemble_cpu_clk_hw_set_rate(struct clk_hw *hw, unsigned long rate,
 					unsigned long parent_rate)
 {
 	struct ensemble_cpu_clk *cpu = to_ensemble_cpu_clk(hw);
@@ -125,48 +123,47 @@ static const char *const adc_clk_sels[] = {"syst_pclk", "160m_clk"};
 static const char *const cmp_clk_sels[] = {"syst_pclk", "160m_clk"};
 static const char *const sd_clk_sels[] = {"syst_hclk", "100m_clk"};
 struct clk_hw *__ensemble_clk_hw_composite(const char *name,
-					const char * const *parent_names,
-					int num_parents, void __iomem *reg,
-					u32 composite_flags,
-					unsigned long flags);
+					   const char * const *parent_names,
+					   int num_parents, void __iomem *reg,
+					   u32 composite_flags,
+					   unsigned long flags);
 
 DEFINE_SPINLOCK(ensemble_ccps_lock);
 EXPORT_SYMBOL_GPL(ensemble_ccps_lock);
 
 static inline struct clk_hw *__ensemble_clk_hw_mux(const char *name, void __iomem *reg,
-			u8 shift, u8 width, const char * const *parents,
-			int num_parents, unsigned long flags, unsigned long clk_mux_flags)
+						   u8 shift, u8 width, const char * const *parents,
+						   int num_parents, unsigned long flags,
+						   unsigned long clk_mux_flags)
 {
 	return clk_hw_register_mux(NULL, name, parents, num_parents,
-			flags | CLK_SET_RATE_NO_REPARENT, reg, shift,
-			width, clk_mux_flags, &ensemble_ccps_lock);
+				   flags | CLK_SET_RATE_NO_REPARENT, reg, shift,
+				   width, clk_mux_flags, &ensemble_ccps_lock);
 }
 
 static inline struct clk_hw *__ensemble_clk_hw_gate(const char *name, const char *parent,
-						void __iomem *reg, u8 shift,
-						unsigned long flags,
-						unsigned long clk_gate_flags)
+						    void __iomem *reg, u8 shift,
+						    unsigned long flags,
+						    unsigned long clk_gate_flags)
 {
 	return clk_hw_register_gate(NULL, name, parent, flags | CLK_SET_RATE_PARENT, reg,
-					shift, clk_gate_flags, &ensemble_ccps_lock);
+				    shift, clk_gate_flags, &ensemble_ccps_lock);
 }
 
-static inline struct clk_hw *ensemble_clk_hw_fixed_factor(const char *name,
-		const char *parent, unsigned int mult, unsigned int div)
+static inline struct clk_hw *ensemble_clk_hw_fixed_factor(const char *name, const char *parent,
+							  unsigned int mult, unsigned int div)
 {
 	return clk_hw_register_fixed_factor(NULL, name, parent,
-			CLK_SET_RATE_PARENT, mult, div);
+					    CLK_SET_RATE_PARENT, mult, div);
 }
 
-static inline struct clk_hw *ensemble_clk_hw_divider(const char *name,
-			const char *parent_name,
-			void __iomem *reg,
-			u8 shift,
-			u8 width)
+static inline struct clk_hw *ensemble_clk_hw_divider(const char *name, const char *parent_name,
+						     void __iomem *reg, u8 shift, u8 width)
 {
 	return clk_hw_register_divider(NULL, name, parent_name,
-			CLK_SET_RATE_PARENT, reg,
-			shift, width, CLK_DIVIDER_ONE_BASED, &ensemble_ccps_lock);
+				       CLK_SET_RATE_PARENT, reg,
+				       shift, width, CLK_DIVIDER_ONE_BASED,
+				       &ensemble_ccps_lock);
 }
 
 /**
@@ -200,11 +197,9 @@ static struct device_node *find_child_clock_by_name(struct device_node *parent, 
 
 #define CC_GATE_SHIFT		0
 
-struct clk_hw *__ensemble_clk_hw_composite(const char *name,
-					const char * const *parent_names,
-					int num_parents, void __iomem *reg,
-					u32 composite_flags,
-					unsigned long flags)
+struct clk_hw *__ensemble_clk_hw_composite(const char *name, const char * const *parent_names,
+					   int num_parents, void __iomem *reg, u32 composite_flags,
+					   unsigned long flags)
 {
 	struct clk_hw *hw = ERR_PTR(-ENOMEM), *mux_hw;
 	struct clk_hw *div_hw, *gate_hw = NULL;
@@ -243,8 +238,8 @@ struct clk_hw *__ensemble_clk_hw_composite(const char *name,
 	gate->lock = &ensemble_ccps_lock;
 
 	hw = clk_hw_register_composite(NULL, name, parent_names,
-			num_parents, mux_hw, &clk_mux_ops, div_hw, &clk_divider_ops,
-			gate_hw, &clk_gate_ops, flags);
+				       num_parents, mux_hw, &clk_mux_ops, div_hw, &clk_divider_ops,
+				       gate_hw, &clk_gate_ops, flags);
 	if (IS_ERR(hw))
 		goto free_gate;
 
@@ -271,13 +266,12 @@ free_mux:
 #define ensemble_clk_hw_gate(name, parent, reg, shift) \
 	ensemble_clk_hw_gate_flags(name, parent, reg, shift, 0)
 
-#define _ensemble_clk_hw_composite(name, parent_names, reg, composite_flags, flags) \
-	__ensemble_clk_hw_composite(name, parent_names, \
-		ARRAY_SIZE(parent_names), reg, composite_flags, flags)
+#define _ensemble_clk_hw_composite(name, parent_names, num_parents, reg, composite_flags, flags) \
+	__ensemble_clk_hw_composite(name, parent_names, num_parents, reg, composite_flags, flags)
 
-#define ensemble_clk_hw_composite(name, parent_names, reg) \
-	_ensemble_clk_hw_composite(name, parent_names, reg, \
-			0, CLK_SET_RATE_NO_REPARENT)
+#define ensemble_clk_hw_composite(name, parent_names, num_parents, reg) \
+	_ensemble_clk_hw_composite(name, parent_names, num_parents, reg, \
+				   0, CLK_SET_RATE_NO_REPARENT)
 
 static void __init ensemble_clocks_init(struct device_node *ccps_node)
 {
@@ -315,11 +309,11 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 
 	/* Register the fixed 50MHz REFCLK from the ETH PHY */
 	hws[ENSEMBLE_ETH_REFCLK] = clk_hw_register_fixed_rate(NULL, "eth_refclk", NULL, 0,
-									50000000);
+							      50000000);
 	hws[ENSEMBLE_76M8_CLK] = clk_hw_register_fixed_rate(NULL, "76m8_clk", NULL, 0,
-									HFXO_76M8_CLK);
+							    HFXO_76M8_CLK);
 	hws[ENSEMBLE_AUDIO_CLK] = clk_hw_register_fixed_rate(NULL, "audio_clk", NULL, 0,
-									EXT_AUDIO_CLK);
+							     EXT_AUDIO_CLK);
 
 	hws[ENSEMBLE_SYST_ACLK] =  ensemble_clk_hw_fixed_factor("syst_aclk", "pll_clk1", 1, 2);
 	hws[ENSEMBLE_SYST_HCLK] = ensemble_clk_hw_fixed_factor("syst_hclk", "syst_aclk", 1, 2);
@@ -336,34 +330,33 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	hws[ENSEMBLE_266M_CLK] = ensemble_clk_hw_gate("266m_clk", "266m_sclk", cgu_base + 0x14, 21);
 
 	hws[ENSEMBLE_RTC_CLK] = ensemble_clk_hw_fixed_factor("s32k_clk",
-				"pll_clk3", 1, RTC_CLK_DIVIDER);
-	hws[ENSEMBLE_S32K_CLK] = ensemble_clk_hw_gate("timer",
-				"s32k_clk", vbat_base + 0x10, 0);
+							     "pll_clk3", 1, RTC_CLK_DIVIDER);
+	hws[ENSEMBLE_S32K_CLK] = ensemble_clk_hw_gate("timer", "s32k_clk", vbat_base + 0x10, 0);
 
 	hws[ENSEMBLE_UART0_CLK_SEL] = ensemble_clk_hw_mux("uart0_sclk",
-				base + 0x8, 8, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 8, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART1_CLK_SEL] = ensemble_clk_hw_mux("uart1_sclk",
-				base + 0x8, 9, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 9, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART2_CLK_SEL] = ensemble_clk_hw_mux("uart2_sclk",
-				base + 0x8, 10, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 10, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART3_CLK_SEL] = ensemble_clk_hw_mux("uart3_sclk",
-				base + 0x8, 11, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 11, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART4_CLK_SEL] = ensemble_clk_hw_mux("uart4_sclk",
-				base + 0x8, 12, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 12, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART5_CLK_SEL] = ensemble_clk_hw_mux("uart5_sclk",
-				base + 0x8, 13, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 13, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART6_CLK_SEL] = ensemble_clk_hw_mux("uart6_sclk",
-				base + 0x8, 14, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 14, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 	hws[ENSEMBLE_UART7_CLK_SEL] = ensemble_clk_hw_mux("uart7_sclk",
-				base + 0x8, 15, 1, uart_clk_src_sels,
-				ARRAY_SIZE(uart_clk_src_sels));
+							  base + 0x8, 15, 1, uart_clk_src_sels,
+							  ARRAY_SIZE(uart_clk_src_sels));
 
 	clk_set_parent(hws[ENSEMBLE_UART0_CLK_SEL]->clk, hws[ENSEMBLE_SYST_PCLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_UART1_CLK_SEL]->clk, hws[ENSEMBLE_SYST_PCLK]->clk);
@@ -384,172 +377,161 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	hws[ENSEMBLE_UART7_CLK] = ensemble_clk_hw_gate("uart7_clk", "uart7_sclk", base + 0x8, 7);
 
 	hws[ENSEMBLE_CANFD_CLK_SEL] = ensemble_clk_hw_mux("canfd_sclk",
-				base + 0xC, 16, 1, canfd_clk_src_sels,
-				ARRAY_SIZE(canfd_clk_src_sels));
+							  base + 0xC, 16, 1, canfd_clk_src_sels,
+							  ARRAY_SIZE(canfd_clk_src_sels));
 	clk_set_parent(hws[ENSEMBLE_CANFD_CLK_SEL]->clk, hws[ENSEMBLE_HFOSC_CLK]->clk);
 	hws[ENSEMBLE_CANFD_CLK] = ensemble_clk_hw_gate("canfd_clk", "canfd_sclk", base + 0xc, 12);
 
-	hws[ENSEMBLE_I3C_CLK] = ensemble_clk_hw_gate("i3c_clk",
-				"syst_pclk", base + 0x24, 0);
-	hws[ENSEMBLE_DAC121_CLK] = ensemble_clk_hw_gate("dac121_clk",
-				"syst_pclk", base + 0x34, 4);
-	hws[ENSEMBLE_DAC120_CLK] = ensemble_clk_hw_gate("dac120_clk",
-				"syst_pclk", base + 0x34, 0);
-	hws[ENSEMBLE_DWC_USB_CLK] = ensemble_clk_hw_gate("dwc_clk",
-				"syst_pclk", ccpmst_base + 0xC, 20);
+	hws[ENSEMBLE_I3C_CLK] = ensemble_clk_hw_gate("i3c_clk", "syst_pclk", base + 0x24, 0);
+	hws[ENSEMBLE_DAC121_CLK] = ensemble_clk_hw_gate("dac121_clk", "syst_pclk", base + 0x34, 4);
+	hws[ENSEMBLE_DAC120_CLK] = ensemble_clk_hw_gate("dac120_clk", "syst_pclk", base + 0x34, 0);
+	hws[ENSEMBLE_DWC_USB_CLK] = ensemble_clk_hw_gate("dwc_clk", "syst_pclk",
+							 ccpmst_base + 0xC, 20);
 
-	/*
+	/**
 	 * camera_pixclk shares ccpmst_base + 0x0 bit 0 with the sensor's
 	 * extclk gate. If the unused-clock cleanup disables camera_pixclk,
 	 * it also clears that shared bit and turns off extclk, breaking
 	 * ARX3A0 I2C. Keep this clock enabled until the gate sharing is
 	 * modelled explicitly.
 	 */
-	hws[ENSEMBLE_CAMERA_PIXCLK] = _ensemble_clk_hw_composite("camera_pixclk",
-								 pixclk_sels, ccpmst_base + 0x0,
+	hws[ENSEMBLE_CAMERA_PIXCLK] = _ensemble_clk_hw_composite("camera_pixclk", pixclk_sels,
+								 ARRAY_SIZE(pixclk_sels),
+								 ccpmst_base + 0x0,
 								 0, CLK_IGNORE_UNUSED);
-	hws[ENSEMBLE_CDC200_PIXCLK] = ensemble_clk_hw_composite("cdc200_pixclk",
-				pixclk_sels, ccpmst_base + 0x4);
-	hws[ENSEMBLE_CSI_PIXCLK] = ensemble_clk_hw_composite("csi_pixclk",
-				pixclk_sels, ccpmst_base + 0x8);
+	hws[ENSEMBLE_CDC200_PIXCLK] = ensemble_clk_hw_composite("cdc200_pixclk", pixclk_sels,
+								ARRAY_SIZE(pixclk_sels),
+								ccpmst_base + 0x4);
+	hws[ENSEMBLE_CSI_PIXCLK] = ensemble_clk_hw_composite("csi_pixclk", pixclk_sels,
+							     ARRAY_SIZE(pixclk_sels),
+							     ccpmst_base + 0x8);
 	hws[ENSEMBLE_CSI_APB] =
-		ensemble_clk_hw_gate("csi_apb", "syst_pclk",
-				     ccpmst_base + 0xC,
-				     24);
+		ensemble_clk_hw_gate("csi_apb", "syst_pclk", ccpmst_base + 0xC, 24);
 	hws[ENSEMBLE_CPI_APB] =
-		ensemble_clk_hw_gate("cpi_apb", "syst_pclk",
-				     ccpmst_base + 0xC,
-				     0);
+		ensemble_clk_hw_gate("cpi_apb", "syst_pclk", ccpmst_base + 0xC, 0);
 
 	hws[ENSEMBLE_CDC200_DPI_PIXCLK] =  ensemble_clk_hw_fixed_factor("cdc200_dpi_pixclk",
-				"cdc200_pixclk", 1, 1);
+									"cdc200_pixclk", 1, 1);
 
 	hws[ENSEMBLE_MIPI_BYPASS_CLK] = ensemble_clk_hw_gate("mipi_bypass_clk",
-				"hfosc_clk", ccpmst_base + 0x40, 12);
+							     "hfosc_clk", ccpmst_base + 0x40, 12);
 	hws[ENSEMBLE_MIPI_PLLREF_CLK] = ensemble_clk_hw_gate("mipi_pllref_clk",
-				"hfosc_clk", ccpmst_base + 0x40, 8);
+							     "hfosc_clk", ccpmst_base + 0x40, 8);
 	hws[ENSEMBLE_MIPI_RXDPHY_CLK] = ensemble_clk_hw_gate("mipi_rxdphy_clk",
-				"hfosc_clk", ccpmst_base + 0x40, 4);
+							     "hfosc_clk", ccpmst_base + 0x40, 4);
 	hws[ENSEMBLE_MIPI_TXDPHY_CLK] = ensemble_clk_hw_gate("mipi_txdphy_clk",
-				"hfosc_clk", ccpmst_base + 0x40, 0);
-
+							     "hfosc_clk", ccpmst_base + 0x40, 0);
 
 	hws[ENSEMBLE_ETH_CSR_CLK] = ensemble_clk_hw_gate("eth_csr_clk",
-				"syst_hclk", ccpmst_base + 0xC, 12);
+							 "syst_hclk", ccpmst_base + 0xC, 12);
 
 	hws[ENSEMBLE_ETH_CLK] = ensemble_clk_hw_mux("eth_clk",
-				ccpmst_base + 0x80, 4, 1, eth_clk_sels,
-				ARRAY_SIZE(eth_clk_sels));
+						    ccpmst_base + 0x80, 4, 1, eth_clk_sels,
+						    ARRAY_SIZE(eth_clk_sels));
 
 	clk_set_parent(hws[ENSEMBLE_ETH_CLK]->clk, hws[ENSEMBLE_ETH_REFCLK]->clk);
 
 	hws[ENSEMBLE_ADC120_CLK] = ensemble_clk_hw_mux("adc120_clk",
-				base + 0x30, 0, 1, adc_clk_sels,
-				ARRAY_SIZE(adc_clk_sels));
+						       base + 0x30, 0, 1, adc_clk_sels,
+						       ARRAY_SIZE(adc_clk_sels));
 	hws[ENSEMBLE_ADC121_CLK] = ensemble_clk_hw_mux("adc121_clk",
-				base + 0x30, 4, 1, adc_clk_sels,
-				ARRAY_SIZE(adc_clk_sels));
+						       base + 0x30, 4, 1, adc_clk_sels,
+						       ARRAY_SIZE(adc_clk_sels));
 	hws[ENSEMBLE_ADC122_CLK] = ensemble_clk_hw_mux("adc122_clk",
-				base + 0x30, 8, 1, adc_clk_sels,
-				ARRAY_SIZE(adc_clk_sels));
+						       base + 0x30, 8, 1, adc_clk_sels,
+						       ARRAY_SIZE(adc_clk_sels));
 	hws[ENSEMBLE_ADC24_CLK] = ensemble_clk_hw_mux("adc24_clk",
-				base + 0x30, 12, 1, adc_clk_sels,
-				ARRAY_SIZE(adc_clk_sels));
+						      base + 0x30, 12, 1, adc_clk_sels,
+						      ARRAY_SIZE(adc_clk_sels));
 
 	clk_set_parent(hws[ENSEMBLE_ADC120_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_ADC121_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_ADC122_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_ADC24_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 
-	hws[ENSEMBLE_CMP0_CLK] = ensemble_clk_hw_mux("cmp0_clk",
-					base + 0x38, 0, 1, cmp_clk_sels,
-					ARRAY_SIZE(cmp_clk_sels));
-	hws[ENSEMBLE_CMP1_CLK] = ensemble_clk_hw_mux("cmp1_clk",
-					base + 0x38, 4, 1, cmp_clk_sels,
-					ARRAY_SIZE(cmp_clk_sels));
-	hws[ENSEMBLE_CMP2_CLK] = ensemble_clk_hw_mux("cmp2_clk",
-					base + 0x38, 8, 1, cmp_clk_sels,
-					ARRAY_SIZE(cmp_clk_sels));
-	hws[ENSEMBLE_CMP3_CLK] = ensemble_clk_hw_mux("cmp3_clk",
-					base + 0x38, 12, 1, cmp_clk_sels,
-					ARRAY_SIZE(cmp_clk_sels));
+	hws[ENSEMBLE_CMP0_CLK] = ensemble_clk_hw_mux("cmp0_clk", base + 0x38, 0, 1, cmp_clk_sels,
+						     ARRAY_SIZE(cmp_clk_sels));
+	hws[ENSEMBLE_CMP1_CLK] = ensemble_clk_hw_mux("cmp1_clk", base + 0x38, 4, 1, cmp_clk_sels,
+						     ARRAY_SIZE(cmp_clk_sels));
+	hws[ENSEMBLE_CMP2_CLK] = ensemble_clk_hw_mux("cmp2_clk", base + 0x38, 8, 1, cmp_clk_sels,
+						     ARRAY_SIZE(cmp_clk_sels));
+	hws[ENSEMBLE_CMP3_CLK] = ensemble_clk_hw_mux("cmp3_clk", base + 0x38, 12, 1, cmp_clk_sels,
+						     ARRAY_SIZE(cmp_clk_sels));
 
 	clk_set_parent(hws[ENSEMBLE_CMP0_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_CMP1_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_CMP2_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_CMP3_CLK]->clk, hws[ENSEMBLE_160M_CLK]->clk);
 
-	hws[ENSEMBLE_SPI0_SS_IN_SEL_MST_CLK] = ensemble_clk_hw_gate("spi0_ssi_in_sel_clk",
-				"syst_hclk", base + 0x28, 0);
-	hws[ENSEMBLE_SPI1_SS_IN_SEL_MST_CLK] = ensemble_clk_hw_gate("spi1_ssi_in_sel_clk",
-				"syst_hclk", base + 0x28, 1);
-	hws[ENSEMBLE_SPI2_SS_IN_SEL_MST_CLK] = ensemble_clk_hw_gate("spi2_ssi_in_sel_clk",
-				"syst_hclk", base + 0x28, 2);
-	hws[ENSEMBLE_SPI3_SS_IN_SEL_MST_CLK] = ensemble_clk_hw_gate("spi3_ssi_in_sel_clk",
-				"syst_hclk", base + 0x28, 3);
-	hws[ENSEMBLE_SPI0_SS_IN_VAL_MST_CLK] = ensemble_clk_hw_gate("spi0_ssi_in_val_clk",
-				"spi0_ssi_in_sel_clk", base + 0x28, 8);
-	hws[ENSEMBLE_SPI1_SS_IN_VAL_MST_CLK] = ensemble_clk_hw_gate("spi1_ssi_in_val_clk",
-				"spi1_ssi_in_sel_clk", base + 0x28, 9);
-	hws[ENSEMBLE_SPI2_SS_IN_VAL_MST_CLK] = ensemble_clk_hw_gate("spi2_ssi_in_val_clk",
-				"spi2_ssi_in_sel_clk", base + 0x28, 10);
-	hws[ENSEMBLE_SPI3_SS_IN_VAL_MST_CLK] = ensemble_clk_hw_gate("spi3_ssi_in_val_clk",
-				"spi3_ssi_in_sel_clk", base + 0x28, 11);
-	hws[ENSEMBLE_SPI0_SS_IN_SEL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi0_ssi_slv_in_sel_clk", "syst_hclk", base + 0x28, 0, 0,
-				CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI1_SS_IN_SEL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi1_ssi_slv_in_sel_clk", "syst_hclk", base + 0x28, 1, 0,
-				CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI2_SS_IN_SEL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi2_ssi_slv_in_sel_clk", "syst_hclk", base + 0x28, 2, 0,
-				CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI3_SS_IN_SEL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi3_ssi_slv_in_sel_clk", "syst_hclk", base + 0x28, 3, 0,
-				CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI0_SS_IN_VAL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi0_ssi_slv_in_val_clk", "spi0_ssi_slv_in_sel_clk", base + 0x28,
-				8, 0, CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI1_SS_IN_VAL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi1_ssi_slv_in_val_clk", "spi1_ssi_slv_in_sel_clk", base + 0x28,
-				9, 0, CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI2_SS_IN_VAL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi2_ssi_slv_in_val_clk", "spi2_ssi_slv_in_sel_clk", base + 0x28,
-				10, 0, CLK_GATE_SET_TO_DISABLE);
-	hws[ENSEMBLE_SPI3_SS_IN_VAL_SLV_CLK] = ensemble_clk_hw_gate_clk_flags(
-				"spi3_ssi_slv_in_val_clk", "spi3_ssi_slv_in_sel_clk", base + 0x28,
-				11, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI0_SS_IN_SEL_MST_CLK] =
+		ensemble_clk_hw_gate("spi0_ssi_in_sel_clk", "syst_hclk", base + 0x28, 0);
+	hws[ENSEMBLE_SPI1_SS_IN_SEL_MST_CLK] =
+		ensemble_clk_hw_gate("spi1_ssi_in_sel_clk", "syst_hclk", base + 0x28, 1);
+	hws[ENSEMBLE_SPI2_SS_IN_SEL_MST_CLK] =
+		ensemble_clk_hw_gate("spi2_ssi_in_sel_clk", "syst_hclk", base + 0x28, 2);
+	hws[ENSEMBLE_SPI3_SS_IN_SEL_MST_CLK] =
+		ensemble_clk_hw_gate("spi3_ssi_in_sel_clk", "syst_hclk", base + 0x28, 3);
+	hws[ENSEMBLE_SPI0_SS_IN_VAL_MST_CLK] =
+		ensemble_clk_hw_gate("spi0_ssi_in_val_clk", "spi0_ssi_in_sel_clk", base + 0x28, 8);
+	hws[ENSEMBLE_SPI1_SS_IN_VAL_MST_CLK] =
+		ensemble_clk_hw_gate("spi1_ssi_in_val_clk", "spi1_ssi_in_sel_clk", base + 0x28, 9);
+	hws[ENSEMBLE_SPI2_SS_IN_VAL_MST_CLK] =
+		ensemble_clk_hw_gate("spi2_ssi_in_val_clk", "spi2_ssi_in_sel_clk", base + 0x28, 10);
+	hws[ENSEMBLE_SPI3_SS_IN_VAL_MST_CLK] =
+		ensemble_clk_hw_gate("spi3_ssi_in_val_clk", "spi3_ssi_in_sel_clk", base + 0x28, 11);
+	hws[ENSEMBLE_SPI0_SS_IN_SEL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi0_ssi_slv_in_sel_clk", "syst_hclk",
+					       base + 0x28, 0, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI1_SS_IN_SEL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi1_ssi_slv_in_sel_clk", "syst_hclk",
+					       base + 0x28, 1, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI2_SS_IN_SEL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi2_ssi_slv_in_sel_clk", "syst_hclk",
+					       base + 0x28, 2, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI3_SS_IN_SEL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi3_ssi_slv_in_sel_clk", "syst_hclk",
+					       base + 0x28, 3, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI0_SS_IN_VAL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi0_ssi_slv_in_val_clk", "spi0_ssi_slv_in_sel_clk",
+					       base + 0x28, 8, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI1_SS_IN_VAL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi1_ssi_slv_in_val_clk", "spi1_ssi_slv_in_sel_clk",
+					       base + 0x28, 9, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI2_SS_IN_VAL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi2_ssi_slv_in_val_clk", "spi2_ssi_slv_in_sel_clk",
+					       base + 0x28, 10, 0, CLK_GATE_SET_TO_DISABLE);
+	hws[ENSEMBLE_SPI3_SS_IN_VAL_SLV_CLK] =
+		ensemble_clk_hw_gate_clk_flags("spi3_ssi_slv_in_val_clk", "spi3_ssi_slv_in_sel_clk",
+					       base + 0x28, 11, 0, CLK_GATE_SET_TO_DISABLE);
 
 	hws[ENSEMBLE_SD_CLK] = ensemble_clk_hw_mux("sdhci_clk",
-				ccpmst_base + 0xC, 16, 1, sd_clk_sels,
-				ARRAY_SIZE(sd_clk_sels));
+						   ccpmst_base + 0xC, 16, 1, sd_clk_sels,
+						   ARRAY_SIZE(sd_clk_sels));
 	clk_set_parent(hws[ENSEMBLE_SD_CLK]->clk, hws[ENSEMBLE_100M_CLK]->clk);
 
 	hws[ENSEMBLE_CGU_76M8_CLK] = ensemble_clk_hw_gate("cgu_76m8_clk",
-				"76m8_clk", cgu_base + 0x14, 24);
+							  "76m8_clk", cgu_base + 0x14, 24);
 
 	hws[ENSEMBLE_PDM_SCLK] = ensemble_clk_hw_mux("pdm_sclk",
-				base + 0x0, 9, 1, audio_clk_src_sels,
-				ARRAY_SIZE(audio_clk_src_sels));
+						     base + 0x0, 9, 1, audio_clk_src_sels,
+						     ARRAY_SIZE(audio_clk_src_sels));
 
 	clk_set_parent(hws[ENSEMBLE_PDM_SCLK]->clk, hws[ENSEMBLE_CGU_76M8_CLK]->clk);
 
-	hws[ENSEMBLE_PDM_CLK] = ensemble_clk_hw_gate("pdm_clk",
-				"pdm_sclk", base + 0x0, 8);
-
+	hws[ENSEMBLE_PDM_CLK] = ensemble_clk_hw_gate("pdm_clk", "pdm_sclk", base + 0x0, 8);
 
 	hws[ENSEMBLE_I2S0_SCLK] = ensemble_clk_hw_mux("i2s0_sclk",
-				base + 0x10, 16, 1, audio_clk_src_sels,
-				ARRAY_SIZE(audio_clk_src_sels));
+						      base + 0x10, 16, 1, audio_clk_src_sels,
+						      ARRAY_SIZE(audio_clk_src_sels));
 	hws[ENSEMBLE_I2S1_SCLK] = ensemble_clk_hw_mux("i2s1_sclk",
-				base + 0x14, 16, 1, audio_clk_src_sels,
-				ARRAY_SIZE(audio_clk_src_sels));
+						      base + 0x14, 16, 1, audio_clk_src_sels,
+						      ARRAY_SIZE(audio_clk_src_sels));
 	hws[ENSEMBLE_I2S2_SCLK] = ensemble_clk_hw_mux("i2s2_sclk",
-				base + 0x18, 16, 1, audio_clk_src_sels,
-				ARRAY_SIZE(audio_clk_src_sels));
+						      base + 0x18, 16, 1, audio_clk_src_sels,
+						      ARRAY_SIZE(audio_clk_src_sels));
 	hws[ENSEMBLE_I2S3_SCLK] = ensemble_clk_hw_mux("i2s3_sclk",
-				base + 0x1c, 16, 1, audio_clk_src_sels,
-				ARRAY_SIZE(audio_clk_src_sels));
+						      base + 0x1c, 16, 1, audio_clk_src_sels,
+						      ARRAY_SIZE(audio_clk_src_sels));
 
 	clk_set_parent(hws[ENSEMBLE_I2S0_SCLK]->clk, hws[ENSEMBLE_CGU_76M8_CLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_I2S1_SCLK]->clk, hws[ENSEMBLE_CGU_76M8_CLK]->clk);
@@ -557,33 +539,29 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	clk_set_parent(hws[ENSEMBLE_I2S3_SCLK]->clk, hws[ENSEMBLE_CGU_76M8_CLK]->clk);
 
 	hws[ENSEMBLE_I2S0_SCLK_AON] = ensemble_clk_hw_gate("i2s0_aon_clk",
-				"i2s0_sclk", base + 0x10, 20);
+							   "i2s0_sclk", base + 0x10, 20);
 	hws[ENSEMBLE_I2S1_SCLK_AON] = ensemble_clk_hw_gate("i2s1_aon_clk",
-				"i2s1_sclk", base + 0x14, 20);
+							   "i2s1_sclk", base + 0x14, 20);
 	hws[ENSEMBLE_I2S2_SCLK_AON] = ensemble_clk_hw_gate("i2s2_aon_clk",
-				"i2s2_sclk", base + 0x18, 20);
+							   "i2s2_sclk", base + 0x18, 20);
 	hws[ENSEMBLE_I2S3_SCLK_AON] = ensemble_clk_hw_gate("i2s3_aon_clk",
-				"i2s3_sclk", base + 0x1c, 20);
+							   "i2s3_sclk", base + 0x1c, 20);
 
-	hws[ENSEMBLE_I2S0_CLK] = ensemble_clk_hw_gate("i2s0_clk",
-				"i2s0_aon_clk", base + 0x10, 12);
-	hws[ENSEMBLE_I2S1_CLK] = ensemble_clk_hw_gate("i2s1_clk",
-				"i2s1_aon_clk", base + 0x14, 12);
-	hws[ENSEMBLE_I2S2_CLK] = ensemble_clk_hw_gate("i2s2_clk",
-				"i2s2_aon_clk", base + 0x18, 12);
-	hws[ENSEMBLE_I2S3_CLK] = ensemble_clk_hw_gate("i2s3_clk",
-				"i2s3_aon_clk", base + 0x1c, 12);
+	hws[ENSEMBLE_I2S0_CLK] = ensemble_clk_hw_gate("i2s0_clk", "i2s0_aon_clk", base + 0x10, 12);
+	hws[ENSEMBLE_I2S1_CLK] = ensemble_clk_hw_gate("i2s1_clk", "i2s1_aon_clk", base + 0x14, 12);
+	hws[ENSEMBLE_I2S2_CLK] = ensemble_clk_hw_gate("i2s2_clk", "i2s2_aon_clk", base + 0x18, 12);
+	hws[ENSEMBLE_I2S3_CLK] = ensemble_clk_hw_gate("i2s3_clk", "i2s3_aon_clk", base + 0x1c, 12);
 
 	hws[ENSEMBLE_I2S0_BIT_CLK] = ensemble_clk_hw_divider("i2s0_bit_clk",
-					"76m8_clk", base + 0x10, 0, 10);
+							     "76m8_clk", base + 0x10, 0, 10);
 	hws[ENSEMBLE_I2S1_BIT_CLK] = ensemble_clk_hw_divider("i2s1_bit_clk",
-					"76m8_clk", base + 0x14, 0, 10);
+							     "76m8_clk", base + 0x14, 0, 10);
 	hws[ENSEMBLE_I2S2_BIT_CLK] = ensemble_clk_hw_divider("i2s2_bit_clk",
-					"76m8_clk", base + 0x18, 0, 10);
+							     "76m8_clk", base + 0x18, 0, 10);
 	hws[ENSEMBLE_I2S3_BIT_CLK] = ensemble_clk_hw_divider("i2s3_bit_clk",
-					"76m8_clk", base + 0x1c, 0, 10);
+							     "76m8_clk", base + 0x1c, 0, 10);
 	hws[ENSEMBLE_DMA_ENA_CLK] = ensemble_clk_hw_gate("dma_clk",
-				"syst_aclk", ccpmst_base + 0xC, 4);
+							 "syst_aclk", ccpmst_base + 0xC, 4);
 
 	iter = find_child_clock_by_name(ccps_node, "extclk");
 	if (iter) {
@@ -597,18 +575,13 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 		writel(val, ccpmst_base);
 
 		hws[ENSEMBLE_EXT_CLK_DIV] =
-			ensemble_clk_hw_divider("extclk_rate",
-						"syst_aclk",
-						ccpmst_base,
-						16, 9);
+			ensemble_clk_hw_divider("extclk_rate", "syst_aclk", ccpmst_base, 16, 9);
 
 		hws[ENSEMBLE_EXT_CLK] =
-			ensemble_clk_hw_gate("extclk", "extclk_rate",
-					     ccpmst_base + 0x0,
-					     0);
+			ensemble_clk_hw_gate("extclk", "extclk_rate", ccpmst_base + 0x0, 0);
 	}
 
-	/*
+	/**
 	 * Register CPU clock with custom ops for dynamic rate reading.
 	 * The CPU clock is derived from pll_clk1 (800 MHz) divided by
 	 * HOSTCPUCLK_DIV1 register at CLKCTL_SYS_BASE + 0x808.
@@ -655,7 +628,7 @@ err_check_hws:
 	for (int i = 0; i < ENSEMBLE_CLK_END; i++) {
 		if (IS_ERR(hws[i]))
 			pr_err("ensemble clk %u: register failed with %ld\n",
-			i, PTR_ERR(hws[i]));
+			       i, PTR_ERR(hws[i]));
 	}
 
 	if (!clk_hw_data) {
