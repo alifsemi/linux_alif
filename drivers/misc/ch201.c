@@ -133,7 +133,8 @@ static long ch201_ioctl(struct file *file,
 							       xfer.len - offset);
 
 				if (copy_from_user(kernel_buf,
-						   (void __user *)(uintptr_t)(xfer.buf_ptr + offset),
+						   (void __user *)(uintptr_t)
+						   (xfer.buf_ptr + offset),
 						   current_chunk)) {
 					kfree(kernel_buf);
 					return -EFAULT;
