@@ -106,9 +106,11 @@
 #define DLL_CMDOUT_SRC_CLK_NEG		BIT(28)
 #define DLL_CMDOUT_EN_SRC_CLK_NEG	BIT(29)
 
-#define DLL_LOCK_WO_TMOUT(x) \
-	((((x) & DWCMSHC_EMMC_DLL_LOCKED) == DWCMSHC_EMMC_DLL_LOCKED) && \
-	(((x) & DWCMSHC_EMMC_DLL_TIMEOUT) == 0))
+static inline bool dll_lock_wo_tmout(u32 x)
+{
+	return ((x & DWCMSHC_EMMC_DLL_LOCKED) == DWCMSHC_EMMC_DLL_LOCKED) &&
+	       ((x & DWCMSHC_EMMC_DLL_TIMEOUT) == 0);
+}
 
 /* PHY register area pointer */
 #define DWC_MSHC_PTR_PHY_R	0x300
@@ -195,8 +197,10 @@
 
 #define FLAG_IO_FIXED_1V8	BIT(0)
 
-#define BOUNDARY_OK(addr, len) \
-	((addr | (SZ_128M - 1)) == ((addr + len - 1) | (SZ_128M - 1)))
+static inline bool boundary_ok(dma_addr_t addr, int len)
+{
+	return (addr | (SZ_128M - 1)) == ((addr + len - 1) | (SZ_128M - 1));
+}
 
 #define DWCMSHC_SDHCI_CQE_TRNS_MODE	(SDHCI_TRNS_MULTI | \
 					 SDHCI_TRNS_BLK_CNT_EN | \
@@ -274,7 +278,7 @@ static void dwcmshc_adma_write_desc(struct sdhci_host *host, void **desc,
 {
 	int tmplen, offset;
 
-	if (likely(!len || BOUNDARY_OK(addr, len))) {
+	if (likely(!len || boundary_ok(addr, len))) {
 		sdhci_adma_write_desc(host, desc, addr, len, cmd);
 		return;
 	}
@@ -459,20 +463,20 @@ static void dwcmshc_set_uhs_signaling(struct sdhci_host *host,
 	ctrl_2 = sdhci_readw(host, SDHCI_HOST_CONTROL2);
 	/* Select Bus Speed Mode for host */
 	ctrl_2 &= ~SDHCI_CTRL_UHS_MASK;
-	if ((timing == MMC_TIMING_MMC_HS200) ||
-	    (timing == MMC_TIMING_UHS_SDR104))
+	if (timing == MMC_TIMING_MMC_HS200 ||
+	    timing == MMC_TIMING_UHS_SDR104) {
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR104;
-	else if (timing == MMC_TIMING_UHS_SDR12)
+	} else if (timing == MMC_TIMING_UHS_SDR12) {
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR12;
-	else if ((timing == MMC_TIMING_UHS_SDR25) ||
-		 (timing == MMC_TIMING_MMC_HS))
+	} else if (timing == MMC_TIMING_UHS_SDR25 ||
+		 timing == MMC_TIMING_MMC_HS) {
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR25;
-	else if (timing == MMC_TIMING_UHS_SDR50)
+	} else if (timing == MMC_TIMING_UHS_SDR50) {
 		ctrl_2 |= SDHCI_CTRL_UHS_SDR50;
-	else if ((timing == MMC_TIMING_UHS_DDR50) ||
-		 (timing == MMC_TIMING_MMC_DDR52))
+	} else if (timing == MMC_TIMING_UHS_DDR50 ||
+		 timing == MMC_TIMING_MMC_DDR52) {
 		ctrl_2 |= SDHCI_CTRL_UHS_DDR50;
-	else if (timing == MMC_TIMING_MMC_HS400) {
+	} else if (timing == MMC_TIMING_MMC_HS400) {
 		/* set CARD_IS_EMMC bit to enable Data Strobe for HS400 */
 		ctrl = sdhci_readw(host, priv->vendor_specific_area1 + DWCMSHC_EMMC_CONTROL);
 		ctrl |= DWCMSHC_CARD_IS_EMMC;
@@ -582,7 +586,7 @@ static void dwcmshc_set_tran_desc(struct cqhci_host *cq_host, u8 **desc,
 {
 	int tmplen, offset;
 
-	if (likely(!len || BOUNDARY_OK(addr, len))) {
+	if (likely(!len || boundary_ok(addr, len))) {
 		cqhci_set_tran_desc(*desc, addr, len, end, dma64);
 		return;
 	}
@@ -640,7 +644,8 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 		 * Disable DLL and reset both of sample and drive clock.
 		 * The bypass bit and start bit need to be set if DLL is not locked.
 		 */
-		sdhci_writel(host, DWCMSHC_EMMC_DLL_BYPASS | DWCMSHC_EMMC_DLL_START, DWCMSHC_EMMC_DLL_CTRL);
+		sdhci_writel(host, DWCMSHC_EMMC_DLL_BYPASS | DWCMSHC_EMMC_DLL_START,
+			     DWCMSHC_EMMC_DLL_CTRL);
 		sdhci_writel(host, DLL_RXCLK_ORI_GATE, DWCMSHC_EMMC_DLL_RXCLK);
 		sdhci_writel(host, 0, DWCMSHC_EMMC_DLL_TXCLK);
 		sdhci_writel(host, 0, DECMSHC_EMMC_DLL_CMDOUT);
@@ -676,7 +681,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 		DWCMSHC_EMMC_DLL_START;
 	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_CTRL);
 	err = readl_poll_timeout(host->ioaddr + DWCMSHC_EMMC_DLL_STATUS0,
-				 extra, DLL_LOCK_WO_TMOUT(extra), 1,
+				 extra, dll_lock_wo_tmout(extra), 1,
 				 500 * USEC_PER_MSEC);
 	if (err) {
 		dev_err(mmc_dev(host->mmc), "DLL lock timeout!\n");
@@ -692,7 +697,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 	    host->mmc->ios.timing == MMC_TIMING_MMC_HS400)
 		txclk_tapnum = priv->txclk_tapnum;
 
-	if ((priv->devtype == DWCMSHC_RK3588) && host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
+	if (priv->devtype == DWCMSHC_RK3588 && host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
 		txclk_tapnum = DLL_TXCLK_TAPNUM_90_DEGREES;
 
 		extra = DLL_CMDOUT_SRC_CLK_NEG |
@@ -984,7 +989,8 @@ static int cv18xx_sdhci_execute_tuning(struct sdhci_host *host, u32 opcode)
 	int min, max, avg, ret;
 	int win_length, target_min, target_max, target_win_length;
 
-	min = max = 0;
+	min = 0;
+	max = 0;
 	target_win_length = 0;
 
 	sdhci_reset_tuning(host);
