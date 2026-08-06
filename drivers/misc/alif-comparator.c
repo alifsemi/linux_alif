@@ -59,8 +59,7 @@ static void cmp_set_filter(struct cmp_device *cmp)
 	u32 val;
 
 	val = readl(cmp->regs + CMP_FILTER_CTRL);
-	val |= CMP_FILTER_CONTROL_ENABLE |
-			FIELD_PREP(CMP_FILTER_TAPS_MASK, cmp->filter_taps);
+	val |= CMP_FILTER_CONTROL_ENABLE | FIELD_PREP(CMP_FILTER_TAPS_MASK, cmp->filter_taps);
 	writel(val, cmp->regs + CMP_FILTER_CTRL);
 }
 
@@ -84,26 +83,28 @@ static void cmp_set_config(struct cmp_device *cmp)
 	u32 val;
 
 	switch (cmp->instance) {
-
 	case CMP0_INSTANCE:
-		val = cmp->pos_input << CMP0_IN_POS_SEL_POS | cmp->neg_input  << CMP0_IN_NEG_SEL_POS
-				| cmp->hysteresis << CMP0_HYST_SEL_POS;
+		val = (cmp->pos_input << CMP0_IN_POS_SEL_POS) |
+		      (cmp->neg_input << CMP0_IN_NEG_SEL_POS) |
+		      (cmp->hysteresis << CMP0_HYST_SEL_POS);
 		break;
-
 	case CMP1_INSTANCE:
-		val = cmp->pos_input << CMP1_IN_POS_SEL_POS | cmp->neg_input  << CMP1_IN_NEG_SEL_POS
-				| cmp->hysteresis << CMP1_HYST_SEL_POS;
+		val = (cmp->pos_input << CMP1_IN_POS_SEL_POS) |
+		      (cmp->neg_input << CMP1_IN_NEG_SEL_POS) |
+		      (cmp->hysteresis << CMP1_HYST_SEL_POS);
 		break;
-
 	case CMP2_INSTANCE:
-		val = cmp->pos_input << CMP2_IN_POS_SEL_POS | cmp->neg_input  << CMP2_IN_NEG_SEL_POS
-				| cmp->hysteresis << CMP2_HYST_SEL_POS;
+		val = (cmp->pos_input << CMP2_IN_POS_SEL_POS) |
+		      (cmp->neg_input << CMP2_IN_NEG_SEL_POS) |
+		      (cmp->hysteresis << CMP2_HYST_SEL_POS);
 		break;
-
 	case CMP3_INSTANCE:
-		val = cmp->pos_input << CMP2_IN_POS_SEL_POS | cmp->neg_input  << CMP2_IN_NEG_SEL_POS
-				| cmp->hysteresis << CMP2_HYST_SEL_POS;
+		val = (cmp->pos_input << CMP3_IN_POS_SEL_POS) |
+		      (cmp->neg_input << CMP3_IN_NEG_SEL_POS) |
+		      (cmp->hysteresis << CMP3_HYST_SEL_POS);
 		break;
+	default:
+		return;
 	}
 	writel(val, cmp->regs);
 }
@@ -149,7 +150,7 @@ static int cmp_start(struct cmp_device *cmp)
 static irqreturn_t alif_cmp_isr(int irq, void *dev_id)
 {
 	struct cmp_device *cmp = dev_id;
-	uint8_t int_status = readl(cmp->regs + CMP_INTERRUPT_STATUS) & CMP_INT_STATUS_MASK;
+	u8 int_status = readl(cmp->regs + CMP_INTERRUPT_STATUS) & CMP_INT_STATUS_MASK;
 
 	if (int_status == CMP_FILTER_EVENT_CLEAR_ALL)
 		writel(CMP_FILTER_EVENT_CLEAR_ALL, cmp->regs + CMP_INTERRUPT_STATUS);
@@ -185,8 +186,7 @@ static irqreturn_t alif_cmp_threaded_isr(int irq, void *dev_id)
 }
 
 /* Sysfs attribute functions */
-static ssize_t status_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+static ssize_t status_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 	int val = cmp->g_val;
@@ -198,9 +198,8 @@ static ssize_t status_show(struct device *dev,
 	return sysfs_emit(buf, "%d\n", val);
 }
 
-static ssize_t status_store(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t count)
+static ssize_t status_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t count)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 	unsigned long value;
@@ -216,7 +215,7 @@ static ssize_t status_store(struct device *dev,
 	mutex_unlock(&cmp->lock_m);
 
 	ret = wait_for_completion_interruptible_timeout(&cmp->completion,
-			msecs_to_jiffies(TIMEOUT_MS));
+							msecs_to_jiffies(TIMEOUT_MS));
 	if (ret < 0) {
 		gpiod_set_value(cmp->led, 0);
 		return ret;
@@ -230,17 +229,15 @@ static ssize_t status_store(struct device *dev,
 	return count;
 }
 
-static ssize_t pos_input_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
+static ssize_t pos_input_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 
 	return sysfs_emit(buf, "%u\n", cmp->pos_input);
 }
 
-static ssize_t pos_input_store(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t count)
+static ssize_t pos_input_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 	u8 val;
@@ -263,7 +260,7 @@ static ssize_t neg_input_show(struct device *dev, struct device_attribute *attr,
 }
 
 static ssize_t neg_input_store(struct device *dev, struct device_attribute *attr,
-		const char *buf, size_t count)
+			       const char *buf, size_t count)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 	int val;
@@ -284,7 +281,7 @@ static ssize_t hysteresis_show(struct device *dev, struct device_attribute *attr
 }
 
 static ssize_t hysteresis_store(struct device *dev, struct device_attribute *attr,
-		const char *buf, size_t count)
+				const char *buf, size_t count)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 	int val;
@@ -297,9 +294,8 @@ static ssize_t hysteresis_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 
-static ssize_t start_store(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t count)
+static ssize_t start_store(struct device *dev, struct device_attribute *attr,
+			   const char *buf, size_t count)
 {
 	struct cmp_device *cmp = dev_get_drvdata(dev);
 
@@ -309,7 +305,6 @@ static ssize_t start_store(struct device *dev,
 	return count;
 }
 
-
 /* Similar show/store functions for position, neg_input and hysteresis, etc. */
 static DEVICE_ATTR_RW(status);
 static DEVICE_ATTR_RW(pos_input);
@@ -318,16 +313,16 @@ static DEVICE_ATTR_RW(hysteresis);
 static DEVICE_ATTR_WO(start);
 
 static struct attribute *cmp_attrs[] = {
-		&dev_attr_status.attr,
-		&dev_attr_start.attr,
-		&dev_attr_pos_input.attr,
-		&dev_attr_neg_input.attr,
-		&dev_attr_hysteresis.attr,
-		NULL
+	&dev_attr_status.attr,
+	&dev_attr_start.attr,
+	&dev_attr_pos_input.attr,
+	&dev_attr_neg_input.attr,
+	&dev_attr_hysteresis.attr,
+	NULL
 };
 
 static const struct attribute_group cmp_attr_group = {
-		.attrs = cmp_attrs,
+	.attrs = cmp_attrs,
 };
 
 static void cmp_init_defaults(struct cmp_device *cmp)
@@ -390,12 +385,11 @@ static int cmp_probe(struct platform_device *pdev)
 			dev_err(dev, "Failed to register misc device: %d\n", ret);
 			return ret;
 		}
-	cmp_analog_config();
+		cmp_analog_config();
 	}
 
 	ret = devm_request_threaded_irq(&pdev->dev, cmp->irq, alif_cmp_isr,
-			alif_cmp_threaded_isr, IRQF_ONESHOT, DRIVER_NAME,
-			cmp);
+					alif_cmp_threaded_isr, IRQF_ONESHOT, DRIVER_NAME, cmp);
 
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed requesting threaded interrupt\n");
@@ -418,8 +412,8 @@ static int cmp_probe(struct platform_device *pdev)
 	}
 
 	dev_info(dev,
-		"ALIF CMP driver loaded for IRQ %d and MMIO base=0x%px\n",
-		cmp->irq, cmp->regs);
+		 "ALIF CMP driver loaded for IRQ %d and MMIO base=%p\n",
+		 cmp->irq, cmp->regs);
 	return 0;
 
 err_hw:
@@ -453,18 +447,18 @@ static void cmp_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id cmp_of_match[] = {
-		{ .compatible = "alif,cmp-module" },
-		{},
+	{ .compatible = "alif,cmp-module" },
+	{},
 };
 MODULE_DEVICE_TABLE(of, cmp_of_match);
 
 static struct platform_driver cmp_driver = {
-		.probe = cmp_probe,
-		.remove_new = cmp_remove,
-		.driver = {
-				.name = DRIVER_NAME,
-				.of_match_table = cmp_of_match,
-		},
+	.probe = cmp_probe,
+	.remove_new = cmp_remove,
+	.driver = {
+		.name = DRIVER_NAME,
+		.of_match_table = cmp_of_match,
+	},
 };
 
 module_platform_driver(cmp_driver);

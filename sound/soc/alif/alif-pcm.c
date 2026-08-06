@@ -72,8 +72,8 @@
 #define ALL_CH_AUDIO_DETECT_IRQ_EN	0xFF00
 #define PDM_MAX_REG			0x7D4
 
-#define EVEN_CH_DATA(n)			(n & 0xFFFF)
-#define ODD_CH_DATA(n)			((n >> 16) & 0xFFFF)
+#define EVEN_CH_DATA(n)			((n) & 0xFFFF)
+#define ODD_CH_DATA(n)			(((n) >> 16) & 0xFFFF)
 
 #define CHANNEL_0			BIT(0)
 #define CHANNEL_1			BIT(1)
@@ -95,47 +95,45 @@
 #define PDM_MODE_8_96K				0x8
 #define PDM_MODE_9_192K				0x9
 
-static const uint32_t fir_coefficients_even[NUM_COEFFICIENTS] = {
+static const u32 fir_coefficients_even[NUM_COEFFICIENTS] = {
 	0x00000000, 0x000007FF, 0x00000000, 0x00000004, 0x00000004,
 	0x000007FC, 0x00000000, 0x000007FB, 0x000007E4, 0x00000000,
 	0x0000002B, 0x00000009, 0x00000016, 0x00000049, 0x00000793,
 	0x000006F8, 0x00000045, 0x00000178
 };
 
-static const uint32_t fir_coefficients_odd[NUM_COEFFICIENTS] = {
+static const u32 fir_coefficients_odd[NUM_COEFFICIENTS] = {
 	0x00000001, 0x00000003, 0x00000003, 0x000007F4, 0x00000004,
 	0x000007ED, 0x000007F5, 0x000007F4, 0x000007D3, 0x000007FE,
 	0x000007BC, 0x000007E5, 0x000007D9, 0x00000793, 0x00000029,
 	0x0000072C, 0x00000072, 0x000002FD
 };
 
-static const uint32_t iir_coeff_sel = 4;
+static const u32 iir_coeff_sel = 4;
 
-static const uint32_t phase_values[MAX_CHANNELS] = {
+static const u32 phase_values[MAX_CHANNELS] = {
 	0x00000003, 0x0000001F, 0x00000003, 0x0000001F,
 	0x0000001F, 0x00000003, 0x0000001F, 0x00000003
 };
 
-static const uint32_t gain_values[MAX_CHANNELS] = {
+static const u32 gain_values[MAX_CHANNELS] = {
 	0x00000013, 0x0000000D, 0x00000013, 0x0000000D,
 	0x0000000D, 0x00000013, 0x0000000D, 0x00000013
 };
 
-static const uint32_t pkdet_th_values = 0x00060002;
+static const u32 pkdet_th_values = 0x00060002;
 
-static const uint32_t pkdet_itv_values[MAX_CHANNELS] = {
+static const u32 pkdet_itv_values[MAX_CHANNELS] = {
 	0x00020027, 0x0004002D, 0x00020027, 0x0004002D,
 	0x0004002D, 0x00020027, 0x0004002D, 0x00020027
 };
 
-static ssize_t  modefreq_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-static ssize_t  modefreq_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
-static ssize_t  channelsel_show(struct device *dev,
-		struct device_attribute *attr, char *buf);
-static ssize_t  channelsel_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t  modefreq_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t  modefreq_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count);
+static ssize_t  channelsel_show(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t  channelsel_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t count);
 
 static DEVICE_ATTR_RW(modefreq);
 static DEVICE_ATTR_RW(channelsel);
@@ -204,49 +202,41 @@ static const struct regmap_config alif_pdm_regmap_config = {
 	.cache_type = REGCACHE_FLAT,
 };
 
-
 /* FIR Coefficients Setup */
 static void pcm_setup(struct alif_pcm_dev *dev)
 {
 	for (int ch = 0; ch < MAX_CHANNELS; ch++) {
-		const uint32_t *coefficients = (ch % 2 == 0) ?
+		const u32 *coefficients = (ch % 2 == 0) ?
 				fir_coefficients_even : fir_coefficients_odd;
 
 		for (int i = 0; i < NUM_COEFFICIENTS; i++)
-			regmap_write(dev->regmap,
-			PDM_CH0_FIR_COEF_0 + ch * CHANNEL_OFFSET + i * 4,
-			coefficients[i]);
+			regmap_write(dev->regmap, PDM_CH0_FIR_COEF_0 + ch * CHANNEL_OFFSET + i * 4,
+				     coefficients[i]);
 
-		regmap_write(dev->regmap,
-			PDM_CH0_IIR_COEF_SEL + ch * CHANNEL_OFFSET,
-			iir_coeff_sel);
-		regmap_write(dev->regmap,
-			PDM_CH0_PHASE + ch * CHANNEL_OFFSET,
-			phase_values[ch]);
-		regmap_write(dev->regmap,
-			PDM_CH0_GAIN + ch * CHANNEL_OFFSET,
-			gain_values[ch]);
-		regmap_write(dev->regmap,
-			PDM_CH0_PKDET_TH + ch * CHANNEL_OFFSET,
-			pkdet_th_values);
-		regmap_write(dev->regmap,
-			PDM_CH0_PKDET_ITV + ch * CHANNEL_OFFSET,
-			pkdet_itv_values[ch]);
+		regmap_write(dev->regmap, PDM_CH0_IIR_COEF_SEL + ch * CHANNEL_OFFSET,
+			     iir_coeff_sel);
+		regmap_write(dev->regmap, PDM_CH0_PHASE + ch * CHANNEL_OFFSET,
+			     phase_values[ch]);
+		regmap_write(dev->regmap, PDM_CH0_GAIN + ch * CHANNEL_OFFSET,
+			     gain_values[ch]);
+		regmap_write(dev->regmap, PDM_CH0_PKDET_TH + ch * CHANNEL_OFFSET,
+			     pkdet_th_values);
+		regmap_write(dev->regmap, PDM_CH0_PKDET_ITV + ch * CHANNEL_OFFSET,
+			     pkdet_itv_values[ch]);
 	}
 }
 
 /* Sysfs Functions */
 static ssize_t modefreq_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
+			     struct device_attribute *attr, char *buf)
 {
 	struct alif_pcm_dev *pdev = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d\n", pdev->pdm_mode);
 }
 
-static ssize_t modefreq_store(struct device *dev,
-		struct device_attribute *attr,
-		const char *buf, size_t count)
+static ssize_t modefreq_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
 {
 	struct alif_pcm_dev *pdev = dev_get_drvdata(dev);
 	int val;
@@ -259,16 +249,15 @@ static ssize_t modefreq_store(struct device *dev,
 }
 
 static ssize_t channelsel_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
+			       struct device_attribute *attr, char *buf)
 {
 	struct alif_pcm_dev *pdev = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d\n", pdev->channel);
 }
 
-static ssize_t channelsel_store(struct device *dev,
-			struct device_attribute *attr,
-			const char *buf, size_t count)
+static ssize_t channelsel_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t count)
 {
 	struct alif_pcm_dev *pdev = dev_get_drvdata(dev);
 	unsigned int val;
@@ -309,8 +298,7 @@ static irqreturn_t alif_pcm_irq_thread(int irq, void *dev_id)
 
 	buffer = (unsigned short *)substream->runtime->dma_area;
 	buffer_size_bytes = substream->runtime->buffer_size *
-				substream->runtime->channels *
-				(BITS_PER_SAMPLE / 8);
+			    substream->runtime->channels * (BITS_PER_SAMPLE / 8);
 	period_size = substream->runtime->period_size;
 	regmap_read(dev->regmap, PDM_FIFO_STAT_REG, &fifo_count);
 
@@ -356,7 +344,7 @@ static irqreturn_t alif_pcm_irq_thread(int irq, void *dev_id)
 		fifo_count--;
 	}
 	dev->pdm_buffer_ptr = bytes_to_frames(substream->runtime,
-						dev->pdm_buffer_index * 2);
+					      dev->pdm_buffer_index * 2);
 	if (((dev->pdm_buffer_ptr % period_size) + MAX_CHANNELS) >= period_size)
 		snd_pcm_period_elapsed(substream);
 out:
@@ -366,8 +354,7 @@ out:
 
 /* PCM Operations */
 static int alif_pcm_hw_params(struct snd_pcm_substream *substream,
-				struct snd_pcm_hw_params *params,
-				struct snd_soc_dai *dai)
+			      struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
 {
 	struct alif_pcm_dev *dev = snd_soc_dai_get_drvdata(dai);
 	unsigned int rate = params_rate(params);
@@ -457,9 +444,9 @@ static int alif_pcm_hw_params(struct snd_pcm_substream *substream,
 
 	dev->pdm_mode = reg_val;
 	regmap_update_bits(dev->regmap, PDM_CTL0_REG, PDM_MODE_MASK,
-			reg_val << PDM_MODE_POS);
+			   reg_val << PDM_MODE_POS);
 	regmap_update_bits(dev->regmap, PDM_CTL0_REG,
-			PDM_CHANNEL_MASK, dev->channel);
+			   PDM_CHANNEL_MASK, dev->channel);
 
 	pcm_setup(dev);
 
@@ -471,7 +458,7 @@ static int alif_pcm_hw_params(struct snd_pcm_substream *substream,
 }
 
 static int alif_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
-				struct snd_soc_dai *dai)
+			    struct snd_soc_dai *dai)
 {
 	struct alif_pcm_dev *dev = snd_soc_dai_get_drvdata(dai);
 
@@ -481,10 +468,8 @@ static int alif_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 		WRITE_ONCE(dev->pdm_buffer_ptr, 0);
 		WRITE_ONCE(dev->pdm_buffer_index, 0);
 		rcu_assign_pointer(dev->pdm_substream, substream);
-		regmap_write(dev->regmap, PDM_IRQ_ENABLE_REG,
-			FIFO_FULL_IRQ_EN |
-			FIFO_OVERFLOW_IRQ_EN |
-			ALL_CH_AUDIO_DETECT_IRQ_EN);
+		regmap_write(dev->regmap, PDM_IRQ_ENABLE_REG, FIFO_FULL_IRQ_EN |
+			     FIFO_OVERFLOW_IRQ_EN | ALL_CH_AUDIO_DETECT_IRQ_EN);
 		break;
 	}
 	case SNDRV_PCM_TRIGGER_STOP:
@@ -500,7 +485,7 @@ static int alif_pcm_trigger(struct snd_pcm_substream *substream, int cmd,
 }
 
 static snd_pcm_uframes_t alif_pcm_pointer(struct snd_soc_component *component,
-					struct snd_pcm_substream *substream)
+					  struct snd_pcm_substream *substream)
 {
 	struct alif_pcm_dev *dev = substream->runtime->private_data;
 
@@ -522,7 +507,7 @@ static const struct snd_pcm_hardware alif_pcm_hardware = {
 };
 
 static int alif_pcm_open(struct snd_soc_component *component,
-			struct snd_pcm_substream *substream)
+			 struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
@@ -546,7 +531,7 @@ static int alif_pcm_new(struct snd_soc_component *component,
 }
 
 static int alif_pcm_startup(struct snd_pcm_substream *substream,
-					struct snd_soc_dai *dai)
+			    struct snd_soc_dai *dai)
 {
 	struct alif_pcm_dev *dev = snd_soc_dai_get_drvdata(dai);
 
@@ -577,6 +562,7 @@ static struct snd_soc_dai_driver alif_pcm_dai = {
 	},
 	.ops = &alif_pcm_dai_ops,
 };
+
 static const struct snd_soc_component_driver alif_pcm_component = {
 	.name = "alif-pcm",
 	.open = alif_pcm_open,
@@ -613,7 +599,7 @@ static int alif_pcm_probe(struct platform_device *pdev)
 		return PTR_ERR(regs);
 
 	dev->regmap = devm_regmap_init_mmio(&pdev->dev, regs,
-						&alif_pdm_regmap_config);
+					    &alif_pdm_regmap_config);
 	if (IS_ERR(dev->regmap))
 		return PTR_ERR(dev->regmap);
 
@@ -637,7 +623,7 @@ static int alif_pcm_probe(struct platform_device *pdev)
 	dev->pdm_mode = PDM_DEFAULT_MODE;
 
 	err = devm_snd_soc_register_component(&pdev->dev,
-	&alif_pcm_component,
+					      &alif_pcm_component,
 	&alif_pcm_dai, 1);
 	if (err)
 		goto err_clk;
