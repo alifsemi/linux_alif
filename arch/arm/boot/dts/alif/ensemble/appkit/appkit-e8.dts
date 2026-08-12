@@ -6,6 +6,7 @@
 
 #include "../common/ensemble-ex.dtsi"
 #include "../common/devkit_ex_dct_defines.h"
+#include <dt-bindings/media/video-interfaces.h>
 
 / {
 	model = "appkit-e8";
@@ -22,12 +23,21 @@
 		regulator-max-microvolt = <3300000>;
 		regulator-always-on;
 	};
+	reg_camera_power: reg_camera {
+		compatible = "regulator-fixed";
+		regulator-name = "camera-power";
+		regulator-min-microvolt = <2700000>;
+		regulator-max-microvolt = <2700000>;
+		regulator-always-on;
+		status = "okay";
+	};
 	reg_2p7v: regulator-2v7 {
 		compatible = "regulator-fixed";
 		regulator-name = "fixed-2.7V";
 		regulator-min-microvolt = <2700000>;
 		regulator-max-microvolt = <2700000>;
 		regulator-always-on;
+		status = "okay";
 	};
 	reg_1p8v: regulator-1v8 {
 		compatible = "regulator-fixed";
@@ -42,6 +52,7 @@
 		regulator-min-microvolt = <1200000>;
 		regulator-max-microvolt = <1200000>;
 		regulator-always-on;
+		status = "okay";
 	};
 
 	chosen {
@@ -337,6 +348,99 @@
 	status = ETHOSU_NPU_STATUS;
 };
 
+/ {
+	i2cmux {
+		compatible = "i2c-mux-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		mux-gpios = <&port15 3 GPIO_ACTIVE_HIGH>;
+		i2c-parent = <&i2c1>;
+		status = "okay";
+		i2c@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0>;
+
+			arx3a0_selfie: arx3a0@36 {
+				compatible = "onnn,arx3a0";
+				reg = <0x36>;
+				clocks = <&psclks ENSEMBLE_EXT_CLK>;
+				clock-names = "extclk";
+				pinctrl-0 = <&pinctrl_csi_cam>;
+				pinctrl-names = "default";
+				reset-gpios = <&port15 4 GPIO_ACTIVE_LOW>;
+				power-gpios = <&port8 5 GPIO_ACTIVE_HIGH>;
+				vaa-supply = <&reg_2p7v>;
+				vdd-supply = <&reg_1p2v>;
+				vdd_io-supply = <&reg_1p8v>;
+				status = "okay";
+				port {
+					arx3a0_csi2_ep: endpoint {
+						bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+						data-lanes = <1 2>;
+						remote-endpoint = <&csi2_in>;
+						link-frequencies = /bits/ 64 <400000000>;
+					};
+				};
+			};
+		};
+	};
+};
+
+&dphy {
+	status = CSI_STATUS;
+};
+
+&csi {
+	status = CSI_STATUS;
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			csi2_in: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+				remote-endpoint = <&arx3a0_csi2_ep>;
+				data-lanes = <1 2>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			csi_out_ep: endpoint {
+				remote-endpoint = <&cpi_ep_in>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+			};
+		};
+	};
+};
+
+&cpi {
+	status = CPI_STATUS;
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			cpi_ep_in: endpoint {
+				remote-endpoint = <&csi_out_ep>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			cpi_isp_out: endpoint {
+			};
+		};
+
+	};
+};
+
 &pinmux {
 	/*
 	 * syntax:
@@ -486,6 +590,12 @@
 		>;
 	};
 
+	pinctrl_csi_cam: camera1grp {
+		pinmux = <
+			PIN_P0_3__CAM_XVCLK_A	0x23
+		>;
+	};
+
 	pinctrl_camera: camera0grp {
 		pinmux = <
 			PIN_P10_2__CAM_PCLK_B	0x0
@@ -551,4 +661,8 @@
 		>;
 	};
 
+};
+
+&gpio7 {
+	status = "okay";
 };
