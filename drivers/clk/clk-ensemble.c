@@ -410,8 +410,10 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	hws[ENSEMBLE_CPI_APB] =
 		ensemble_clk_hw_gate("cpi_apb", "syst_pclk", ccpmst_base + 0xC, 0);
 
-	hws[ENSEMBLE_CDC200_DPI_PIXCLK] =  ensemble_clk_hw_fixed_factor("cdc200_dpi_pixclk",
-									"cdc200_pixclk", 1, 1);
+	hws[ENSEMBLE_DSI_APB] =
+		ensemble_clk_hw_gate("dsi_apb", "syst_pclk", ccpmst_base + 0xC, 28);
+	hws[ENSEMBLE_CDC200_APB] =
+		ensemble_clk_hw_gate("cdc200_apb", "syst_pclk", ccpmst_base + 0xC, 1);
 
 	hws[ENSEMBLE_MIPI_BYPASS_CLK] = ensemble_clk_hw_gate("mipi_bypass_clk",
 							     "hfosc_clk", ccpmst_base + 0x40, 12);
