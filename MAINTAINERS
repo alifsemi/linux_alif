@@ -7469,6 +7469,14 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/display/panel/synaptics,r63353.yaml
 F:	drivers/gpu/drm/panel/panel-synaptics-r63353.c
 
+DRM DRIVER FOR TES CDC200
+M:	Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+L:	dri-devel@lists.freedesktop.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/display/tes,cdc-2.1.yaml
+F:	Documentation/devicetree/bindings/display/tes,dswz.yaml
+F:	drivers/gpu/drm/tes/
+
 DRM DRIVER FOR TI DLPC3433 MIPI DSI TO DMD BRIDGE
 M:	Jagan Teki <jagan@amarulasolutions.com>
 S:	Maintained

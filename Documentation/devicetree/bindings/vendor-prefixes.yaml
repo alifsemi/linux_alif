@@ -1482,6 +1482,8 @@ patternProperties:
     description: Tempo Semiconductor
   "^terasic,.*":
     description: Terasic Inc.
+  "^tes,.*":
+    description: TES Electronic Solutions GmbH
   "^tesla,.*":
     description: Tesla, Inc.
   "^test,.*":

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/tes,dswz.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TES Electronic Solutions CDC framebuffer deswizzler
+
+maintainers:
+  - Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+
+description:
+  Optional companion block for the TES CDC200 display controller that
+  converts swizzled framebuffer data to linear scanout order.
+
+properties:
+  compatible:
+    const: tes,dswz
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+
+additionalProperties: false
+
+examples:
+  - |
+    deswizzler@0 {
+        compatible = "tes,dswz";
+        reg = <0x0 0x1000>;
+        interrupts = <0>;
+    };
+...
