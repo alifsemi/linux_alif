@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0
+config DRM_TES_CDC
+	tristate "DRM Support for TES CDC200"
+	depends on DRM && OF
+	depends on ARM
+	depends on ARCH_ENSEMBLE || COMPILE_TEST
+	select DRM_KMS_HELPER
+	select DRM_GEM_DMA_HELPER
+	select VIDEOMODE_HELPERS
+	help
+	  DRM/KMS driver for the TES Electronic Solutions CDC200 display
+	  controller found on Alif Ensemble SoCs. This provides CRTC, plane
+	  and encoder support for LCD, LVDS and related display outputs.
+
+	  If M is selected the module will be called cdc.
+
+

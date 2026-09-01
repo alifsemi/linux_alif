@@ -7476,6 +7476,7 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/display/tes,cdc-2.1.yaml
 F:	Documentation/devicetree/bindings/display/tes,dswz.yaml
 F:	drivers/gpu/drm/tes/
+F:	drivers/gpu/drm/tes/cdc_*
 
 DRM DRIVER FOR TI DLPC3433 MIPI DSI TO DMD BRIDGE
 M:	Jagan Teki <jagan@amarulasolutions.com>
