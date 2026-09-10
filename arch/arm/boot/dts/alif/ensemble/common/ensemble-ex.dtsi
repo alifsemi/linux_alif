@@ -1656,6 +1656,24 @@
 			#dma-cells = <2>; /* channel, source */
 			dma-masters = <&dmac_bus_ns>;
 		};
+
+		cdc200: cdc200@49031000 {
+			compatible = "tes,cdc-2.1";
+			reg = <0x49031000 0x1000>;
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "scanline", "fifo-warn",
+					  "fifo-underrun", "bus-error",
+					  "reload";
+			clocks = <&psclks ENSEMBLE_CDC200_APB>, <&psclks ENSEMBLE_CDC200_PIXCLK>;
+			clock-names = "apb_pclk", "pix_clk";
+
+			status = "disabled";
+		};
 	};
 	apb_e: apb@49040000 {
 		compatible = "simple-bus";

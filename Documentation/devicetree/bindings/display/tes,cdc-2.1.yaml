@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/display/tes,cdc-2.1.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: TES Electronic Solutions CDC200 Display Controller
+
+maintainers:
+  - Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+
+description:
+  The TES CDC200 is a display controller used on Alif Ensemble SoCs. It
+  reads framebuffer data and drives LCD, LVDS or DSI encoder outputs.
+
+properties:
+  compatible:
+    const: tes,cdc-2.1
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    minItems: 1
+    maxItems: 5
+    description: |
+      Following interrupts support has been added:
+      scanline (322), FIFO underrun warn (324), FIFO underrun (326),
+      bus error (328) and shadow reload (330). The driver must request
+      every listed interrupt; IRQ_STATUS bits are only set for the SPI
+      that fired.
+
+  interrupt-names:
+    minItems: 1
+    items:
+      - const: scanline
+      - const: fifo-warn
+      - const: fifo-underrun
+      - const: bus-error
+      - const: reload
+
+  clocks:
+    items:
+      - description: APB interface clock
+      - description: Pixel clock
+
+  clock-names:
+    items:
+      - const: apb_pclk
+      - const: pix_clk
+
+  memory-region:
+    maxItems: 1
+    description:
+      Phandle to reserved memory used for the framebuffer. If omitted the
+      framebuffer may be located anywhere in memory.
+
+  port:
+    $ref: /schemas/graph.yaml#/properties/port
+    description:
+      Single RGB output when the controller has only one connection.
+
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+    description: Output ports of the display controller.
+
+    properties:
+      port@0:
+        $ref: /schemas/graph.yaml#/$defs/port-base
+        unevaluatedProperties: false
+        description: Parallel RGB output to a panel or encoder.
+
+        properties:
+          endpoint:
+            $ref: /schemas/media/video-interfaces.yaml#
+            unevaluatedProperties: false
+
+            properties:
+              bus-width:
+                $ref: /schemas/types.yaml#/definitions/uint32
+                enum: [16, 18, 24]
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - clocks
+  - clock-names
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/arm-gic.h>
+    display-controller@49031000 {
+        compatible = "tes,cdc-2.1";
+        reg = <0x49031000 0x1000>;
+        interrupts = <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>;
+        interrupt-names = "scanline", "fifo-warn", "fifo-underrun",
+                          "bus-error", "reload";
+        clocks = <&psclks 0>, <&psclks 1>;
+        clock-names = "apb_pclk", "pix_clk";
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                endpoint {
+                    remote-endpoint = <&panel_in>;
+                    bus-width = <24>;
+                };
+            };
+        };
+    };
+...
