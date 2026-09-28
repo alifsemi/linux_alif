@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/alif,a32-m55-shutdown.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Alif A32 shutdown mailbox client
+
+maintainers:
+  - Pankaj Pandey <pankaj.pandey@alifsemi.com>
+
+description:
+  Mailbox client for the request from M55-HE to power off the A32 cluster.
+  The channels are the M55-HE MHU0 transmit and receive frames.
+
+properties:
+  compatible:
+    const: alif,a32-m55-shutdown
+
+  mboxes:
+    maxItems: 2
+
+  mbox-names:
+    items:
+      - const: tx
+      - const: rx
+
+required:
+  - compatible
+  - mboxes
+  - mbox-names
+
+additionalProperties: false
+
+examples:
+  - |
+    a32-m55-shutdown {
+        compatible = "alif,a32-m55-shutdown";
+        mbox-names = "tx", "rx";
+        mboxes = <&mbox_m55_he_mhu0_tx 0 0>,
+                 <&mbox_m55_he_mhu0_rx 0 0>;
+    };

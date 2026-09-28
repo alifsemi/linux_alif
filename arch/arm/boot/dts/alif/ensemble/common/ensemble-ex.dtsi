@@ -387,6 +387,13 @@
 			  <&mbox_se_mhu1_rx 0 0>;
 	};
 
+	a32_m55_shutdown {
+		compatible = "alif,a32-m55-shutdown";
+		mbox-names = "tx", "rx";
+		mboxes = <&mbox_m55_he_mhu0_tx 0 0>,
+			 <&mbox_m55_he_mhu0_rx 0 0>;
+	};
+
 	rtc: rtc@42000000 {
 		compatible = "snps,designware-rtc";
 		reg = <0x42000000 0x100>;
