@@ -2087,6 +2087,7 @@ F:	drivers/misc/cmp.h
 F:	drivers/phy/synopsys/
 F:	drivers/regulator/ensemble-regulator.c
 F:	drivers/rpmsg/rpmsg_arm_mailbox.c
+F:	drivers/rpmsg/rpmsg_arm_mhu_client.c
 F:	drivers/rtc/rtc-dw-apb.c
 F:	drivers/usb/dwc3/dwc3-ensemble.c
 F:	include/linux/clk/ensemble-clk.h
