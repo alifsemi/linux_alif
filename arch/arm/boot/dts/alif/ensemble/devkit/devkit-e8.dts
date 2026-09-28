@@ -26,6 +26,18 @@
 		serial0 = &uart4;
 	};
 
+	/*
+	 * Non-secure HE MHU pair 1 (0x1B060000 / 0x1B070000, SPI 48 / 49).
+	 * Pair 0 is the secure doorbell and its A32-side frames sit in PD-8.
+	 * txdb2/rxdb2 stay with the arm,client userspace loop.
+	 */
+	a32_m55_shutdown {
+		compatible = "alif,a32-m55-shutdown";
+		mbox-names = "tx", "rx";
+		mboxes = <&mbox_m55_he_mhu1_tx 0 0>,
+			 <&mbox_m55_he_mhu1_rx 0 0>;
+	};
+
 	reg_3p3v: regulator-3v3 {
 		compatible = "regulator-fixed";
 		regulator-name = "fixed-3.3V";
