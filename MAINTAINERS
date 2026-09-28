@@ -2066,7 +2066,9 @@ F:	arch/arm/boot/dts/alif/ensemble/devkit/
 F:	arch/arm/configs/appkit_e6_defconfig
 F:	arch/arm/configs/appkit_e8_defconfig
 F:	arch/arm/configs/appkit_e8_unicore_defconfig
+F:	arch/arm/mach-ensemble/a32_m55_shutdown.c
 F:	arch/arm/mach-ensemble/adc_dac6.c
+F:	arch/arm/mach-ensemble/include/mach/a32_pm.h
 F:	arch/arm/mach-ensemble/sdhci-alif-reset.c
 F:	drivers/counter/register_offsets.h
 F:	drivers/counter/utimer.c
