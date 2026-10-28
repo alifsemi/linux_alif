@@ -1,0 +1,98 @@
+# GitHub Actions equivalent of automation/Jenkinsfile
+name: Kernel build
+
+on:
+  pull_request:
+    branches: [v6.12-dev, main]
+  push:
+    branches: [v6.12-dev, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: codespell and checkpatch --strict
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          CHANGE_TARGET: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -xe
+          printenv
+          echo "====> ${CHANGE_TARGET} ${BRANCH_NAME}"
+          command -v codespell
+          test -x ./scripts/checkpatch.pl
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch origin "$CHANGE_TARGET"
+            commits=$(git log --format="%H" HEAD...origin/"${CHANGE_TARGET}")
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            commits=$(git log --format="%H" "${BEFORE}"..HEAD)
+          else
+            commits=""
+          fi
+          if [ -z "$commits" ]; then
+            commits=$(git rev-parse HEAD)
+          fi
+
+          for iter in $commits; do
+            if ! git show "$iter" | grep "^+" | codespell - ; then
+              echo "Codespell failed on commit $iter"
+              exit 1
+            fi
+            git show --stat "$iter" > checkpatch_input.txt
+            git show "$iter" >> checkpatch_input.txt
+            if cat checkpatch_input.txt | \
+              ./scripts/checkpatch.pl \
+              --strict \
+              --ignore=NO_AUTHOR_SIGN_OFF \
+              --ignore=BAD_SIGN_OFF - ; then
+              echo "INFO:checkpatch.pl succeeded"
+            else
+              echo "ERROR:checkpatch.pl failed on commit $iter"
+              exit 1
+            fi
+          done
+
+  build:
+    needs: [static-checks]
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Build xipImage and DTB
+        run: |
+          set -xe
+          set +u
+          source /opt/alif/apss-tiny/yocto_5.0/0.1/environment-setup-cortexa32hf-neon-poky-linux-musleabi
+
+          make distclean
+          make -j"$(nproc)" devkit_e8_defconfig
+          make -j"$(nproc)" xipImage
+          make alif/ensemble/devkit/devkit-e8.dtb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devkit_e8
+          path: |
+            arch/arm/boot/xipImage
+            arch/arm/boot/dts/alif/ensemble/devkit/devkit-e8.dtb
+            .config
