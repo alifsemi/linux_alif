@@ -31,6 +31,18 @@ config RPMSG_ARM
           hardware blocks. Requires IO memory management and mailbox subsystem
           support.
 
+config RPMSG_ARM_MHU_CLIENT
+	tristate "ARM MHU0 HE client (rxdb2/txdb2 M55_PERIPH_OFF_REQ)"
+	depends on RPMSG_ARM
+	depends on MAILBOX
+	default y
+	help
+	  Claim the same arm,client endpoints as pthread_m55_he_mhu0_inloop
+	  (rxdb2 / txdb2 -> M55-HE MHU0) and ACK M55_PERIPH_OFF_REQ in IRQ
+	  context. The ACK is sent without sleeping, then the A32 shutdown
+	  guard starts orderly_poweroff(). Leaves rpmsg_arm_mailbox.c
+	  unchanged.
+
 config RPMSG_CTRL
 	tristate "RPMSG control interface"
 	depends on RPMSG && ( RPMSG_CHAR || RPMSG_CHAR=n )
