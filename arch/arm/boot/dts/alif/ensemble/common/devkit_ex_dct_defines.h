@@ -85,6 +85,17 @@
  */
 #define CDC200_PARALLEL 0
 
+/*
+ * Camera interface for the CPI input.
+ * Yocto/DCT must select exactly one on DevKits:
+ *   0 = MIPI CSI-2 (serial_camera.dtsi)
+ *   1 = parallel (parallel_camera.dtsi)
+ *
+ * Do not include both fragments in one DTB: they share the CPI input
+ * port. AppKits include only serial_camera.dtsi.
+ */
+#define CPI_PARALLEL 0
+
 /* CSI defines */
 #define CSI_STATUS "disabled"
 
