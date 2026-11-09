@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Parallel camera graph for Ensemble DevKit.
+ * Mutually exclusive with serial_camera.dtsi; selected when
+ * CPI_PARALLEL is 1.
+ */
+
+/ {
+	/*
+	 * The parallel MT9M114 module has its own 24 MHz oscillator. This
+	 * clock only supplies that rate to the driver; it does not drive
+	 * CAM_XVCLK.
+	 */
+	mt9m114_osc: mt9m114-osc {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+};
+
+&i2c1 {
+	mt9m114: camera@48 {
+		compatible = "onnn,mt9m114";
+		reg = <0x48>;
+
+		clocks = <&mt9m114_osc>;
+
+		vdd-supply = <&reg_1p8v>;
+		vddio-supply = <&reg_1p8v>;
+		vaa-supply = <&reg_2p7v>;
+
+		reset-gpios = <&port15 4 GPIO_ACTIVE_LOW>;
+
+		port {
+			mt9m114_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_PARALLEL>;
+				bus-width = <8>;
+				hsync-active = <1>;
+				vsync-active = <1>;
+				pclk-sample = <1>;
+				remote-endpoint = <&cpi_ep_in>;
+				link-frequencies = /bits/ 64 <96000000>;
+			};
+		};
+	};
+};
+
+&cpi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_cam8>;
+	alif,cpi-pclk-active-high;
+	alif,cpi-wait-vsync;
+	status = CPI_STATUS;
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			cpi_ep_in: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_PARALLEL>;
+				bus-width = <8>;
+				remote-endpoint = <&mt9m114_ep>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			cpi_isp_out: endpoint {
+			};
+		};
+	};
+};
