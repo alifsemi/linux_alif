@@ -24,6 +24,7 @@
 #include <media/videobuf2-dma-contig.h>
 #include <media/videobuf2-dma-sg.h>
 #include <media/videobuf2-vmalloc.h>
+#include <media/v4l2-ctrls.h>
 #include <media/v4l2-subdev.h>
 
 #include "plat.h"
@@ -80,8 +81,20 @@
 
 #define CPI_BUSY_POLL_USEC	10
 #define CPI_BUSY_TIMEOUT_USEC	200000
+
+#define CPI_PARALLEL_DEF_BUS_WIDTH	8
+#define CPI_PARALLEL_RAW8_WIDTH		648
+#define CPI_PARALLEL_RAW8_HEIGHT	488
+#define CPI_PARALLEL_RAW8_MAX_WIDTH	800
+#define CPI_PARALLEL_RAW8_MAX_HEIGHT	600
+
 static const struct plat_csi_fmt cpi_formats[] = {
 	{
+		.name = "SGRBG8",
+		.fourcc = V4L2_PIX_FMT_SGRBG8,
+		.depth = 8,
+		.mbus_code = MEDIA_BUS_FMT_SGRBG8_1X8,
+	}, {
 		.name = "BGR888",
 		.fourcc = V4L2_PIX_FMT_BGR24,
 		.depth = 24,
@@ -96,6 +109,11 @@ static const struct plat_csi_fmt cpi_formats[] = {
 		.fourcc = V4L2_PIX_FMT_GREY,
 		.depth = 8,
 		.mbus_code = MEDIA_BUS_FMT_SBGGR8_1X8,
+	}, {
+		.name = "Y10",
+		.fourcc = V4L2_PIX_FMT_Y10,
+		.depth = 10,
+		.mbus_code = MEDIA_BUS_FMT_SGRBG10_1X10,
 	}, {
 		.name = "Y10",
 		.fourcc = V4L2_PIX_FMT_Y10,
@@ -184,16 +202,23 @@ static const struct v4l2_fwnode_endpoint *cpi_get_active_ep(struct cpi_dev *cpi)
 static int
 cpi_enum_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fmtdesc *f)
 {
-	const struct plat_csi_fmt *p_fmt;
+	unsigned int index = 0;
+	unsigned int i, j;
 
-	if (f->index >= ARRAY_SIZE(cpi_formats))
-		return -EINVAL;
+	for (i = 0; i < ARRAY_SIZE(cpi_formats); i++) {
+		for (j = 0; j < i; j++)
+			if (cpi_formats[j].fourcc == cpi_formats[i].fourcc)
+				break;
+		if (j < i)
+			continue;
 
-	p_fmt = &cpi_formats[f->index];
+		if (index++ == f->index) {
+			f->pixelformat = cpi_formats[i].fourcc;
+			return 0;
+		}
+	}
 
-	f->pixelformat = p_fmt->fourcc;
-
-	return 0;
+	return -EINVAL;
 }
 
 static int cpi_g_fmt_vid_cap(struct file *file, void *fh,
@@ -242,6 +267,76 @@ cpi_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f)
 	return 0;
 }
 
+static bool cpi_parallel_grbg(struct cpi_dev *cpi, u32 fourcc)
+{
+	const struct v4l2_fwnode_endpoint *ep;
+
+	if (fourcc != V4L2_PIX_FMT_SGRBG8)
+		return false;
+
+	if (cpi->is_parallel_interface)
+		return true;
+
+	ep = cpi_get_active_ep(cpi);
+	return ep && ep->bus_type == V4L2_MBUS_PARALLEL;
+}
+
+static int cpi_parallel_raw10_crop(struct cpi_dev *cpi, u32 sink_width,
+				   u32 sink_height,
+				   struct v4l2_mbus_framefmt *source_fmt)
+{
+	struct v4l2_subdev *sd = cpi->remote_sd;
+	struct v4l2_subdev_selection sel = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+		.pad = 0,
+		.target = V4L2_SEL_TGT_CROP,
+	};
+	struct v4l2_subdev_format fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+		.pad = 1,
+	};
+	struct v4l2_subdev_format sink_fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+		.pad = 0,
+	};
+	struct v4l2_subdev_state *state;
+	int ret;
+
+	if (!sd)
+		return -ENODEV;
+
+	state = v4l2_subdev_lock_and_get_active_state(sd);
+	ret = v4l2_subdev_call(sd, pad, get_fmt, state, &sink_fmt);
+	if (!ret) {
+		sink_fmt.format.width = sink_width + 8;
+		ret = v4l2_subdev_call(sd, pad, set_fmt, state, &sink_fmt);
+	}
+	if (ret) {
+		if (state)
+			v4l2_subdev_unlock_state(state);
+		return ret;
+	}
+
+	sel.r.left = 4;
+	sel.r.top = 4;
+	sel.r.width = sink_width;
+	sel.r.height = sink_height > 8 ? sink_height - 8 : sink_height;
+
+	ret = v4l2_subdev_call(sd, pad, set_selection, state, &sel);
+	if (!ret) {
+		sink_fmt.format.width = sink_width;
+		ret = v4l2_subdev_call(sd, pad, set_fmt, state, &sink_fmt);
+	}
+	if (!ret)
+		ret = v4l2_subdev_call(sd, pad, get_fmt, state, &fmt);
+	if (!ret)
+		*source_fmt = fmt.format;
+	if (state)
+		v4l2_subdev_unlock_state(state);
+
+	return ret;
+}
+
 static int cpi_s_fmt_vid_cap(struct file *file, void *priv,
 			     struct v4l2_format *f)
 {
@@ -252,7 +347,10 @@ static int cpi_s_fmt_vid_cap(struct file *file, void *priv,
 		.pad = CPI_PAD_SINK,
 	};
 	const struct plat_csi_fmt *plat_fmt;
+	const struct v4l2_fwnode_endpoint *ep;
 	struct v4l2_subdev_state *state;
+	bool parallel_raw8;
+	unsigned int bpp;
 	int ret;
 
 	if (vb2_is_busy(&cpi->vb_queue))
@@ -266,9 +364,19 @@ static int cpi_s_fmt_vid_cap(struct file *file, void *priv,
 	if (!plat_fmt)
 		return -EINVAL;
 
-	sd_fmt.format.width        = f->fmt.pix.width;
-	sd_fmt.format.height       = f->fmt.pix.height;
-	sd_fmt.format.code         = plat_fmt->mbus_code;
+	ep = cpi_get_active_ep(cpi);
+	parallel_raw8 = cpi_parallel_grbg(cpi, plat_fmt->fourcc);
+
+	if (parallel_raw8) {
+		sd_fmt.format.width = CPI_PARALLEL_RAW8_WIDTH;
+		sd_fmt.format.height = CPI_PARALLEL_RAW8_HEIGHT;
+	} else {
+		sd_fmt.format.width = f->fmt.pix.width;
+		sd_fmt.format.height = f->fmt.pix.height;
+	}
+	sd_fmt.format.code         = parallel_raw8 ?
+				     MEDIA_BUS_FMT_SGRBG10_1X10 :
+				     plat_fmt->mbus_code;
 	sd_fmt.format.field        = f->fmt.pix.field;
 	sd_fmt.format.colorspace   = f->fmt.pix.colorspace;
 	sd_fmt.format.ycbcr_enc    = f->fmt.pix.ycbcr_enc;
@@ -291,12 +399,62 @@ static int cpi_s_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.quantization = sd_fmt.format.quantization;
 	f->fmt.pix.xfer_func    = sd_fmt.format.xfer_func;
 	f->fmt.pix.pixelformat  = plat_fmt->fourcc;
-	{
-		unsigned int bpp = (plat_fmt->depth >= 10) ? 16 : plat_fmt->depth;
 
-		f->fmt.pix.bytesperline = ALIGN(DIV_ROUND_UP(bpp * f->fmt.pix.width, 8), 8);
+	if (parallel_raw8) {
+		struct v4l2_mbus_framefmt ifp_source;
+		const struct plat_csi_fmt *link_fmt;
+		unsigned int i;
+
+		ret = cpi_parallel_raw10_crop(cpi, sd_fmt.format.width,
+					      sd_fmt.format.height,
+					      &ifp_source);
+		if (ret) {
+			dev_err(&cpi->pdev->dev,
+				"parallel raw8: IFP crop failed: %d\n", ret);
+			return ret;
+		}
+
+		f->fmt.pix.width = ifp_source.width;
+		f->fmt.pix.height = ifp_source.height;
+		if (f->fmt.pix.width > CPI_PARALLEL_RAW8_MAX_WIDTH ||
+		    f->fmt.pix.height > CPI_PARALLEL_RAW8_MAX_HEIGHT) {
+			dev_err(&cpi->pdev->dev,
+				"parallel raw8: sensor returned %ux%u, refusing full frame\n",
+				f->fmt.pix.width, f->fmt.pix.height);
+			return -EINVAL;
+		}
+
+		link_fmt = cpi_find_mbus_code(ifp_source.code);
+		if (!link_fmt) {
+			dev_err(&cpi->pdev->dev,
+				"parallel raw8: IFP code 0x%x not supported\n",
+				ifp_source.code);
+			return -EINVAL;
+		}
+
+		state = v4l2_subdev_lock_and_get_active_state(sd);
+		for (i = 0; i < CPI_PADS_NUM; i++) {
+			struct v4l2_mbus_framefmt *pad_fmt;
+
+			pad_fmt = v4l2_subdev_state_get_format(state, i);
+			if (!pad_fmt)
+				continue;
+			pad_fmt->width = ifp_source.width;
+			pad_fmt->height = ifp_source.height;
+			pad_fmt->code = ifp_source.code;
+			pad_fmt->field = ifp_source.field;
+		}
+		v4l2_subdev_unlock_state(state);
+
+		cpi->fmt = link_fmt;
 	}
+
+	bpp = (plat_fmt->depth >= 10) ? 16 : plat_fmt->depth;
+	f->fmt.pix.bytesperline = ALIGN(DIV_ROUND_UP(bpp * f->fmt.pix.width, 8), 8);
 	f->fmt.pix.sizeimage    = f->fmt.pix.bytesperline * f->fmt.pix.height;
+
+	if (parallel_raw8)
+		cpi->format.fmt.pix = f->fmt.pix;
 
 	return 0;
 }
@@ -583,7 +741,7 @@ static int cpi_hw_set_geometry(struct cpi_dev *cpi)
 	else if (ep && ep->bus.parallel.bus_width)
 		bus_width = ep->bus.parallel.bus_width;
 	else
-		bus_width = csi_fmt->depth;
+		bus_width = CPI_PARALLEL_DEF_BUS_WIDTH;
 
 	switch (bus_width) {
 	case 1:
@@ -664,7 +822,7 @@ static int cpi_hw_set_geometry(struct cpi_dev *cpi)
 		else
 			val &= ~CFG_VSYNC_POL;
 
-		if (cpi->code_10_on_8)
+		if (cpi->code_10_on_8 && csi_fmt->depth >= 10)
 			val |= CFG_CODE10ON8;
 		else
 			val &= ~CFG_CODE10ON8;
@@ -911,7 +1069,8 @@ static void cpi_vb2_stop_streaming(struct vb2_queue *q)
 
 	spin_lock_irq(&cpi->slock);
 	cpi->stopping = true;
-	cpi_hw_disable_interrupts(cpi, INTR_VSYNC | INTR_BRESP_ERR | INTR_OUTFIFO_OVERRUN |
+	cpi_hw_disable_interrupts(cpi, INTR_VSYNC | INTR_BRESP_ERR |
+				  INTR_INFIFO_OVERRUN | INTR_OUTFIFO_OVERRUN |
 				  INTR_STOP);
 	spin_unlock_irq(&cpi->slock);
 
@@ -974,7 +1133,7 @@ static int cpi_subdev_init_state(struct v4l2_subdev *subdev,
 		fmt = v4l2_subdev_state_get_format(state, i);
 		fmt->width = 1920;
 		fmt->height = 1080;
-		fmt->code = MEDIA_BUS_FMT_SBGGR10_1X10;
+		fmt->code = MEDIA_BUS_FMT_SGRBG10_1X10;
 		fmt->field = V4L2_FIELD_NONE;
 		fmt->colorspace = V4L2_COLORSPACE_SRGB;
 		fmt->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
@@ -1169,7 +1328,7 @@ static void cpi_try_fmt(struct cpi_dev *cpi, struct v4l2_mbus_framefmt *fmt)
 
 	plat_csi = cpi_find_mbus_code(fmt->code);
 	if (!plat_csi) {
-		fmt->code = MEDIA_BUS_FMT_SBGGR10_1X10;
+		fmt->code = MEDIA_BUS_FMT_SGRBG10_1X10;
 		plat_csi = cpi_find_mbus_code(fmt->code);
 	}
 
@@ -1274,7 +1433,8 @@ static int cpi_set_fmt(struct v4l2_subdev *sd,
 	plat_csi = cpi_find_mbus_code(fmt->format.code);
 	if (!plat_csi) {
 		dev_err(&cpi->pdev->dev,
-			"requested media bus format not found\n");
+			"requested media bus format 0x%x not found\n",
+			fmt->format.code);
 		return -EINVAL;
 	}
 	cpi->fmt = plat_csi;
@@ -1379,6 +1539,7 @@ static int cpi_hw_configure(struct cpi_dev *cpi)
 	cpi_hw_clear_interrupts(cpi);
 	cpi_hw_enable_interrupts(cpi, INTR_VSYNC |
 		     INTR_BRESP_ERR |
+		     INTR_INFIFO_OVERRUN |
 		     INTR_OUTFIFO_OVERRUN |
 		     INTR_STOP);
 
@@ -1406,6 +1567,7 @@ static void cpi_hw_disable(struct cpi_dev *cpi)
 
 	cpi_hw_disable_interrupts(cpi, INTR_VSYNC |
 				INTR_BRESP_ERR |
+				INTR_INFIFO_OVERRUN |
 				INTR_OUTFIFO_OVERRUN |
 				INTR_STOP);
 
@@ -1877,6 +2039,9 @@ static irqreturn_t cpi_isr(int irq, void *dev)
 			"AXI Bus response error, BRESP code - %d\n",
 			axi_err_stat & 0x3);
 	}
+
+	if (int_st & INTR_INFIFO_OVERRUN)
+		dev_err(&pdev->dev, "CPI input FIFO overrun\n");
 
 	if (int_st & capture_error_mask)
 		dev_err(&pdev->dev, "frame capture error, int_st = 0x%08x\n",
