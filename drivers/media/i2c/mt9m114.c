@@ -95,6 +95,11 @@
 #define MT9M114_CAM_SENSOR_CFG_FRAME_LENGTH_LINES_MAX		65535
 #define MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK		CCI_REG16(0xc814)
 #define MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK_MAX		8191
+/* Parallel VGA-ish IFP output widths and matching sensor CFG values. */
+#define MT9M114_PARALLEL_VGA_WIDTH			640
+#define MT9M114_PARALLEL_VGA_WIDTH_BINNED		648
+#define MT9M114_PARALLEL_VGA_Y_ADDR_END			973
+#define MT9M114_PARALLEL_VGA_LINE_LENGTH_PCK		10723
 #define MT9M114_CAM_SENSOR_CFG_FINE_CORRECTION		CCI_REG16(0xc816)
 #define MT9M114_CAM_SENSOR_CFG_CPIPE_LAST_ROW		CCI_REG16(0xc818)
 #define MT9M114_CAM_SENSOR_CFG_REG_0_DATA		CCI_REG16(0xc826)
@@ -915,6 +920,26 @@ static int mt9m114_set_frame_rate(struct mt9m114 *sensor)
 	return ret;
 }
 
+/*
+ * Parallel VGA-ish modes need a longer line than the default blanking.
+ * Otherwise the sensor repeats the last active sample until HSYNC ends.
+ * MT9M114_PARALLEL_VGA_LINE_LENGTH_PCK is above
+ * MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK_MAX (V4L2 blanking control limit);
+ * the CFG register accepts this value. Y_ADDR_END is two rows short of the
+ * default window to avoid a corrupt first output line on the parallel bus.
+ */
+static int mt9m114_apply_parallel_timing(struct mt9m114 *sensor)
+{
+	int ret = 0;
+
+	cci_write(sensor->regmap, MT9M114_CAM_SENSOR_CFG_Y_ADDR_END,
+		  MT9M114_PARALLEL_VGA_Y_ADDR_END, &ret);
+	cci_write(sensor->regmap, MT9M114_CAM_SENSOR_CFG_LINE_LENGTH_PCK,
+		  MT9M114_PARALLEL_VGA_LINE_LENGTH_PCK, &ret);
+
+	return ret;
+}
+
 static int mt9m114_start_streaming(struct mt9m114 *sensor,
 				   struct v4l2_subdev_state *pa_state,
 				   struct v4l2_subdev_state *ifp_state)
@@ -940,6 +965,19 @@ static int mt9m114_start_streaming(struct mt9m114 *sensor,
 	ret = __v4l2_ctrl_handler_setup(&sensor->ifp.hdl);
 	if (ret)
 		goto error;
+
+	if (sensor->bus_cfg.bus_type == V4L2_MBUS_PARALLEL) {
+		const struct v4l2_rect *ifp_compose =
+			v4l2_subdev_state_get_compose(ifp_state, 0);
+
+		if (ifp_compose &&
+		    (ifp_compose->width == MT9M114_PARALLEL_VGA_WIDTH ||
+		     ifp_compose->width == MT9M114_PARALLEL_VGA_WIDTH_BINNED)) {
+			ret = mt9m114_apply_parallel_timing(sensor);
+			if (ret)
+				goto error;
+		}
+	}
 
 	/*
 	 * The Change-Config state is transient and moves to the streaming
