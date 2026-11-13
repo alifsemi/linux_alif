@@ -408,6 +408,17 @@ static int dw_spi_dma_wait_rx_done(struct dw_spi *dws)
 }
 
 /*
+ * DMACR must be written while the DW APB SSI controller is disabled (SSIENR = 0).
+ * Writing DMACR while the controller is enabled can cause a fault.
+ */
+static void dw_spi_dma_clear_dmacr(struct dw_spi *dws)
+{
+	dw_spi_enable_chip(dws, 0);
+	dw_writel(dws, DW_SPI_DMACR, 0);
+	dw_spi_enable_chip(dws, 1);
+}
+
+/*
  * dws->dma_chan_busy is set before the dma transfer starts, callback for rx
  * channel will clear a corresponding bit.
  */
@@ -529,7 +540,7 @@ static int dw_spi_dma_transfer_all(struct dw_spi *dws,
 	ret = dw_spi_dma_wait(dws, xfer->len, xfer->effective_speed_hz);
 
 err_clear_dmac:
-	dw_writel(dws, DW_SPI_DMACR, 0);
+	dw_spi_dma_clear_dmacr(dws);
 
 	return ret;
 }
@@ -630,7 +641,7 @@ static int dw_spi_dma_transfer_one(struct dw_spi *dws,
 		rx_len -= len;
 	}
 
-	dw_writel(dws, DW_SPI_DMACR, 0);
+	dw_spi_dma_clear_dmacr(dws);
 
 	return ret;
 }
