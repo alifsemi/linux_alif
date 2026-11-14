@@ -7,6 +7,16 @@
 #include "../common/ensemble-ex.dtsi"
 #include "../common/devkit_ex_dct_defines.h"
 #include <dt-bindings/media/video-interfaces.h>
+#if CDC200_PARALLEL
+#include "../common/parallel_panel.dtsi"
+#else
+#include "../common/serial_panel.dtsi"
+#endif
+#if CPI_PARALLEL
+#include "../common/parallel_camera.dtsi"
+#else
+#include "../common/serial_camera.dtsi"
+#endif
 
 / {
 	model = "devkit-e8";
@@ -63,7 +73,8 @@
 	chosen {
 		bootargs = "console=ttyS0,115200n8 \
 		root=mtd:physmap-flash.0 \
-		rootfstype=cramfs ro loglevel=9";
+		rootfstype=cramfs ro loglevel=9 \
+		fbcon=logo-count:1";
 	};
 
 	sound {
@@ -100,6 +111,10 @@
 
 &utimer {
 	status = UTIMER0_STATUS;
+};
+
+&gpu2d {
+	status = DAVE_2D_STATUS;
 };
 
 &hsusb {
@@ -163,6 +178,19 @@
 		clock-names = "mclk";
 	};
 
+	goodix_ts@5d {
+		compatible = "goodix,gt911";
+		reg = <0x5d>;
+		AVDD28-supply = <&reg_3p3v>;
+		VDDIO-supply = <&reg_1p8v>;
+		interrupt-parent = <&port10>;
+		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+		irq-gpios = <&port10 4 0>;
+		reset-gpios = <&port7 5 GPIO_ACTIVE_LOW>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <800>;
+		status = "okay";
+	};
 };
 
 &i2s3 {
@@ -403,99 +431,6 @@
 	status = ETHOSU_NPU_STATUS;
 };
 
-/ {
-	i2cmux {
-		compatible = "i2c-mux-gpio";
-		#address-cells = <1>;
-		#size-cells = <0>;
-		mux-gpios = <&port15 3 GPIO_ACTIVE_HIGH>;
-		i2c-parent = <&i2c1>;
-		status = "okay";
-		i2c@0 {
-			#address-cells = <1>;
-			#size-cells = <0>;
-			reg = <0>;
-
-			arx3a0_selfie: arx3a0@36 {
-				compatible = "onnn,arx3a0";
-				reg = <0x36>;
-				clocks = <&psclks ENSEMBLE_EXT_CLK>;
-				clock-names = "extclk";
-				pinctrl-0 = <&pinctrl_csi_cam>;
-				pinctrl-names = "default";
-				reset-gpios = <&port15 4 GPIO_ACTIVE_LOW>;
-				power-gpios = <&port8 5 GPIO_ACTIVE_HIGH>;
-				vaa-supply = <&reg_2p7v>;
-				vdd-supply = <&reg_1p2v>;
-				vdd_io-supply = <&reg_1p8v>;
-				status = "okay";
-				port {
-					arx3a0_csi2_ep: endpoint {
-						bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
-						data-lanes = <1 2>;
-						remote-endpoint = <&csi2_in>;
-						link-frequencies = /bits/ 64 <400000000>;
-					};
-				};
-			};
-		};
-	};
-};
-
-&dphy {
-	status = CSI_STATUS;
-};
-
-&csi {
-	status = CSI_STATUS;
-
-	ports {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		port@0 {
-			reg = <0>;
-			csi2_in: endpoint {
-				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
-				remote-endpoint = <&arx3a0_csi2_ep>;
-				data-lanes = <1 2>;
-			};
-		};
-
-		port@1 {
-			reg = <1>;
-			csi_out_ep: endpoint {
-				remote-endpoint = <&cpi_ep_in>;
-				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
-			};
-		};
-	};
-};
-
-&cpi {
-	status = CPI_STATUS;
-
-	ports {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		port@0 {
-			reg = <0>;
-			cpi_ep_in: endpoint {
-				remote-endpoint = <&csi_out_ep>;
-				bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
-			};
-		};
-
-		port@1 {
-			reg = <1>;
-			cpi_isp_out: endpoint {
-			};
-		};
-
-	};
-};
-
 &pinmux {
 	/*
 	 * syntax:
@@ -607,34 +542,34 @@
 
 	pinctrl_cdc200_0: cdc200_0grp {
 		pinmux = <
-			PIN_P5_3__CDC_DE_A	0x23
-			PIN_P5_4__CDC_PCLK_A	0x23
+			PIN_P5_3__CDC_PCLK_A	0x23
+			PIN_P5_4__CDC_DE_A	0x23
 			PIN_P4_1__CDC_HSYNC_B	0x23
+			PIN_P4_0__CDC_VSYNC_B	0x23
+			PIN_P11_0__CDC_D0_B	0x23
+			PIN_P8_1__CDC_D1_A	0x23
 			PIN_P8_2__CDC_D2_A	0x23
 			PIN_P8_3__CDC_D3_A	0x23
 			PIN_P8_4__CDC_D4_A	0x23
-			PIN_P8_5__CDC_D5_A	0x23
+			PIN_P11_5__CDC_D5_B	0x23
+			PIN_P11_6__CDC_D6_B	0x23
+			PIN_P11_7__CDC_D7_B	0x23
+			PIN_P9_0__CDC_D8_A	0x23
+			PIN_P9_1__CDC_D9_A	0x23
 			PIN_P9_2__CDC_D10_A	0x23
 			PIN_P9_3__CDC_D11_A	0x23
 			PIN_P9_4__CDC_D12_A	0x23
-			PIN_P9_5__CDC_D13_A	0x23
+			PIN_P12_5__CDC_D13_B	0x23
+			PIN_P12_6__CDC_D14_B	0x23
+			PIN_P12_7__CDC_D15_B	0x23
+			PIN_P13_0__CDC_D16_B	0x23
+			PIN_P13_1__CDC_D17_B	0x23
 			PIN_P13_2__CDC_D18_B	0x23
 			PIN_P13_3__CDC_D19_B	0x23
 			PIN_P13_4__CDC_D20_B	0x23
 			PIN_P13_5__CDC_D21_B	0x23
-			PIN_P13_7__CDC_D23_B	0x23
 			PIN_P13_6__CDC_D22_B	0x23
-			PIN_P13_1__CDC_D17_B	0x23
-			PIN_P13_0__CDC_D16_B	0x23
-			PIN_P9_7__CDC_D15_A	0x23
-			PIN_P9_6__CDC_D14_A	0x23
-			PIN_P9_1__CDC_D9_A	0x23
-			PIN_P9_0__CDC_D8_A	0x23
-			PIN_P8_7__CDC_D7_A	0x23
-			PIN_P8_6__CDC_D6_A	0x23
-			PIN_P8_1__CDC_D1_A	0x23
-			PIN_P8_0__CDC_D0_A	0x23
-			PIN_P5_6__CDC_VSYNC_A	0x23
+			PIN_P13_7__CDC_D23_B	0x23
 		>;
 	};
 
@@ -660,6 +595,23 @@
 			PIN_P10_1__CAM_VSYNC_B	0x0
 			PIN_P10_0__CAM_HSYNC_B	0x0
 			PIN_P10_3__CAM_XVCLK_B	0x0
+		>;
+	};
+
+	pinctrl_cam8: cam8grp {
+		pinmux = <
+			PIN_P0_0__CAM_HSYNC_A	0x1
+			PIN_P0_1__CAM_VSYNC_A	0x1
+			PIN_P0_2__CAM_PCLK_A	0x1
+			PIN_P0_3__CAM_XVCLK_A	0x23
+			PIN_P8_0__CAM_D0_B	0x1
+			PIN_P8_1__CAM_D1_B	0x1
+			PIN_P8_2__CAM_D2_B	0x1
+			PIN_P8_3__CAM_D3_B	0x1
+			PIN_P8_4__CAM_D4_B	0x1
+			PIN_P8_5__CAM_D5_B	0x1
+			PIN_P8_6__CAM_D6_B	0x1
+			PIN_P8_7__CAM_D7_B	0x1
 		>;
 	};
 

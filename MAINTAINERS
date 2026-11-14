@@ -812,6 +812,11 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/media/alif,ensemble-cpi.yaml
 F:	drivers/media/platform/alif/
 
+ALIF ENSEMBLE LINUX LOGO
+M:	Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+S:	Maintained
+F:	drivers/video/logo/logo_alif*
+
 ALLWINNER A10 CSI DRIVER
 M:	Maxime Ripard <mripard@kernel.org>
 L:	linux-media@vger.kernel.org
@@ -7491,6 +7496,14 @@ F:	Documentation/devicetree/bindings/display/tes,cdc-2.1.yaml
 F:	Documentation/devicetree/bindings/display/tes,dswz.yaml
 F:	drivers/gpu/drm/tes/
 F:	drivers/gpu/drm/tes/cdc_*
+
+DRM DRIVER FOR TES D/AVE-2D
+M:	Yogender Kumar Arya <yogender.kumar@alifsemi.com>
+L:	dri-devel@lists.freedesktop.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/display/tes,d2d-1.0.yaml
+F:	drivers/gpu/drm/d2d/
+F:	include/uapi/drm/alif_drm.h
 
 DRM DRIVER FOR TI DLPC3433 MIPI DSI TO DMD BRIDGE
 M:	Jagan Teki <jagan@amarulasolutions.com>
