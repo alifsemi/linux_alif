@@ -31,6 +31,17 @@ config RPMSG_ARM
           hardware blocks. Requires IO memory management and mailbox subsystem
           support.
 
+config RPMSG_ARM_MHU_CLIENT
+	tristate "Alif A32 shutdown client on non-secure HE MHU1"
+	depends on RPMSG_ARM
+	depends on MAILBOX
+	depends on ARCH_ENSEMBLE
+	help
+	  Probe alif,a32-m55-shutdown and ACK M55_PERIPH_OFF_REQ on the
+	  non-secure M55-HE MHU pair 1. The ACK blocks until the receiver
+	  clears the doorbell, then orderly_poweroff() runs. Enable this
+	  in the E8 defconfig. It is not selected for every RPMSG_ARM build.
+
 config RPMSG_CTRL
 	tristate "RPMSG control interface"
 	depends on RPMSG && ( RPMSG_CHAR || RPMSG_CHAR=n )

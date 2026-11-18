@@ -32,6 +32,9 @@
 #define HFXO_76M8_CLK				76800000
 #define EXT_AUDIO_CLK				76800000
 #define HOSTCPUCLK_DIV_MASK			0x1F
+/* CCPSLV UART_CTRL. Bit N is the UARTn clock gate. */
+#define ENSEMBLE_UART_CTRL			0x8
+#define ENSEMBLE_UART_CLK_BIT(n)		(n)
 
 static struct clk_hw **hws;
 static struct clk_hw_onecell_data *clk_hw_data;
@@ -367,14 +370,37 @@ static void __init ensemble_clocks_init(struct device_node *ccps_node)
 	clk_set_parent(hws[ENSEMBLE_UART6_CLK_SEL]->clk, hws[ENSEMBLE_SYST_PCLK]->clk);
 	clk_set_parent(hws[ENSEMBLE_UART7_CLK_SEL]->clk, hws[ENSEMBLE_SYST_PCLK]->clk);
 
-	hws[ENSEMBLE_UART0_CLK] = ensemble_clk_hw_gate("uart0_clk", "uart0_sclk", base + 0x8, 0);
-	hws[ENSEMBLE_UART1_CLK] = ensemble_clk_hw_gate("uart1_clk", "uart1_sclk", base + 0x8, 1);
-	hws[ENSEMBLE_UART2_CLK] = ensemble_clk_hw_gate("uart2_clk", "uart2_sclk", base + 0x8, 2);
-	hws[ENSEMBLE_UART3_CLK] = ensemble_clk_hw_gate("uart3_clk", "uart3_sclk", base + 0x8, 3);
-	hws[ENSEMBLE_UART4_CLK] = ensemble_clk_hw_gate("uart4_clk", "uart4_sclk", base + 0x8, 4);
-	hws[ENSEMBLE_UART5_CLK] = ensemble_clk_hw_gate("uart5_clk", "uart5_sclk", base + 0x8, 5);
-	hws[ENSEMBLE_UART6_CLK] = ensemble_clk_hw_gate("uart6_clk", "uart6_sclk", base + 0x8, 6);
-	hws[ENSEMBLE_UART7_CLK] = ensemble_clk_hw_gate("uart7_clk", "uart7_sclk", base + 0x8, 7);
+	hws[ENSEMBLE_UART0_CLK] = ensemble_clk_hw_gate("uart0_clk", "uart0_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(0));
+	hws[ENSEMBLE_UART1_CLK] = ensemble_clk_hw_gate("uart1_clk", "uart1_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(1));
+	hws[ENSEMBLE_UART2_CLK] = ensemble_clk_hw_gate("uart2_clk", "uart2_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(2));
+	hws[ENSEMBLE_UART3_CLK] = ensemble_clk_hw_gate("uart3_clk", "uart3_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(3));
+	/*
+	 * Linux console is UART2 (UART2_STATUS okay, console=ttyS0).
+	 * The M55-HE sample's zephyr,console is uart4, and UART4_STATUS is
+	 * disabled, so unused-clock cleanup would gate bit 4 while HE prints.
+	 * That matches the J-Link switch position UART4, not UART2.
+	 */
+	hws[ENSEMBLE_UART4_CLK] = ensemble_clk_hw_gate_flags("uart4_clk", "uart4_sclk",
+							     base + ENSEMBLE_UART_CTRL,
+							     ENSEMBLE_UART_CLK_BIT(4),
+							     CLK_IGNORE_UNUSED);
+	hws[ENSEMBLE_UART5_CLK] = ensemble_clk_hw_gate("uart5_clk", "uart5_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(5));
+	hws[ENSEMBLE_UART6_CLK] = ensemble_clk_hw_gate("uart6_clk", "uart6_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(6));
+	hws[ENSEMBLE_UART7_CLK] = ensemble_clk_hw_gate("uart7_clk", "uart7_sclk",
+						       base + ENSEMBLE_UART_CTRL,
+						       ENSEMBLE_UART_CLK_BIT(7));
 
 	hws[ENSEMBLE_CANFD_CLK_SEL] = ensemble_clk_hw_mux("canfd_sclk",
 							  base + 0xC, 16, 1, canfd_clk_src_sels,
