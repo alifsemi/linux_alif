@@ -43,6 +43,20 @@
 /* ARX3A0 registers */
 #define ARX3A0_REG_VT_PIX_CLK_DIV		0x0300
 #define ARX3A0_REG_FRAME_LENGTH_LINES		0x0340
+#define ARX3A0_REG_LINE_LENGTH_PCK		0x0342
+#define ARX3A0_REG_X_ADDR_START			0x0344
+#define ARX3A0_REG_Y_ADDR_START			0x0346
+#define ARX3A0_REG_X_ADDR_END			0x0348
+#define ARX3A0_REG_Y_ADDR_END			0x034A
+#define ARX3A0_REG_X_OUTPUT_SIZE		0x034C
+#define ARX3A0_REG_Y_OUTPUT_SIZE		0x034E
+/* Manufacturer copies of the SMIA geometry block above. */
+#define ARX3A0_REG_X_ADDR_START_MANUF		0x3002
+#define ARX3A0_REG_Y_ADDR_START_MANUF		0x3004
+#define ARX3A0_REG_X_ADDR_END_MANUF		0x3006
+#define ARX3A0_REG_Y_ADDR_END_MANUF		0x3008
+#define ARX3A0_REG_FRAME_LENGTH_MANUF		0x300A
+#define ARX3A0_REG_LINE_LENGTH_MANUF		0x300C
 
 #define ARX3A0_REG_CHIP_ID			0x3000
 #define ARX3A0_REG_COARSE_INTEGRATION_TIME	0x3012
@@ -65,6 +79,21 @@
 #define ARX3A0_EXPOSURE_LINES			0x366A
 /* RAW10 init table R0x0340 minus one. Longer values do not integrate. */
 #define ARX3A0_EXPOSURE_MAX			0xA47A
+/* Init-table frame and line length. Stream-on exposure must fit the frame. */
+#define ARX3A0_FRAME_LENGTH_RAW10		(ARX3A0_EXPOSURE_MAX + 1)
+#define ARX3A0_LINE_LENGTH_RAW10		0x02f8
+#define ARX3A0_FRAME_LENGTH_RAW8		0xa78e
+#define ARX3A0_LINE_LENGTH_RAW8			0x02ea
+/* Window programmed by both mode tables. RAW8 X end is one past RAW10. */
+#define ARX3A0_X_ADDR_START			4
+#define ARX3A0_Y_ADDR_START			4
+#define ARX3A0_X_ADDR_END_RAW10			(ARX3A0_X_ADDR_START + ARX3A0_WIDTH_MAX - 1)
+#define ARX3A0_Y_ADDR_END			(ARX3A0_Y_ADDR_START + ARX3A0_HEIGHT_MAX - 1)
+#define ARX3A0_X_ADDR_END_RAW8			0x0234
+#define ARX3A0_X_ADDR_END_MANUF_RAW10		ARX3A0_X_ADDR_END_RAW10
+#define ARX3A0_Y_ADDR_END_MANUF_RAW10		ARX3A0_Y_ADDR_END
+#define ARX3A0_X_ADDR_END_MANUF_RAW8		0x0233
+#define ARX3A0_Y_ADDR_END_MANUF_RAW8		0x0234
 #define ARX3A0_REG_PEDESTAL			0x301E
 #define ARX3A0_PEDESTAL_10BIT			0x002A
 
@@ -1261,6 +1290,53 @@ static int arx3a0_enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
+/*
+ * Blanking controls rewrite frame length, line length, and the window
+ * through arx3a0_set_geometry() and leave those values after STREAMOFF.
+ * The next stream-on writes ARX3A0_EXPOSURE_LINES, which does not
+ * integrate in that shortened frame. Put the active mode's table
+ * geometry back once MODE_SELECT has been cleared.
+ */
+static void arx3a0_restore_table_geometry(struct arx3a0_dev *sensor)
+{
+	const bool raw10 = sensor->fmt.code == MEDIA_BUS_FMT_SBGGR10_1X10;
+	const u16 frame = raw10 ? ARX3A0_FRAME_LENGTH_RAW10 :
+				   ARX3A0_FRAME_LENGTH_RAW8;
+	const u16 line = raw10 ? ARX3A0_LINE_LENGTH_RAW10 :
+				  ARX3A0_LINE_LENGTH_RAW8;
+	const u16 x_end = raw10 ? ARX3A0_X_ADDR_END_RAW10 :
+				   ARX3A0_X_ADDR_END_RAW8;
+	const u16 x_end_manuf = raw10 ? ARX3A0_X_ADDR_END_MANUF_RAW10 :
+					ARX3A0_X_ADDR_END_MANUF_RAW8;
+	const u16 y_end_manuf = raw10 ? ARX3A0_Y_ADDR_END_MANUF_RAW10 :
+					ARX3A0_Y_ADDR_END_MANUF_RAW8;
+	__be16 smia[] = {
+		be(ARX3A0_REG_FRAME_LENGTH_LINES),
+		be(frame),
+		be(line),
+		be(ARX3A0_X_ADDR_START),
+		be(ARX3A0_Y_ADDR_START),
+		be(x_end),
+		be(ARX3A0_Y_ADDR_END),
+		be(ARX3A0_WIDTH_MAX),
+		be(ARX3A0_HEIGHT_MAX),
+	};
+
+	/* SMIA block, then manufacturer copies from the init table. */
+	arx3a0_write_regs(sensor, smia, ARRAY_SIZE(smia));
+	arx3a0_write_reg(sensor, ARX3A0_REG_X_ADDR_START_MANUF,
+			 ARX3A0_X_ADDR_START);
+	arx3a0_write_reg(sensor, ARX3A0_REG_Y_ADDR_START_MANUF,
+			 ARX3A0_Y_ADDR_START);
+	arx3a0_write_reg(sensor, ARX3A0_REG_X_ADDR_END_MANUF, x_end_manuf);
+	arx3a0_write_reg(sensor, ARX3A0_REG_Y_ADDR_END_MANUF, y_end_manuf);
+	arx3a0_write_reg(sensor, ARX3A0_REG_FRAME_LENGTH_MANUF, frame);
+	arx3a0_write_reg(sensor, ARX3A0_REG_LINE_LENGTH_MANUF, line);
+
+	sensor->total_height = frame;
+	sensor->total_width = line;
+}
+
 static int arx3a0_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct arx3a0_dev *sensor = to_arx3a0_dev(sd);
@@ -1303,6 +1379,10 @@ static int arx3a0_s_stream(struct v4l2_subdev *sd, int enable)
 		enable ? 0x01 : 0x00);
 
 	ret = arx3a0_set_stream(sensor, enable);
+
+	/* Table geometry, so the next stream-on exposure fits the frame. */
+	if (!ret && !enable)
+		arx3a0_restore_table_geometry(sensor);
 
 	if (!arx3a0_read_reg(sensor, ARX3A0_MODE_SELECT_REGISTER, &val))
 		dev_dbg(dev, "MODE_SELECT readback = 0x%04x\n", val);
